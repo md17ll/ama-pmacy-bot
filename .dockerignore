@@ -1,0 +1,8 @@
+.git
+.github
+.bootstrap/project.zip
+.bootstrap/chunks
+__pycache__
+*.py[cod]
+.pytest_cache
+.env
