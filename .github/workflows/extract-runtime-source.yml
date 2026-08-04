@@ -1,0 +1,50 @@
+name: Extract runtime source
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - ".github/workflows/extract-runtime-source.yml"
+      - ".bootstrap/extract-source-trigger.txt"
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  extract:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Extract verified runtime archive
+        run: |
+          python - <<'PY'
+          from pathlib import Path
+          import base64
+          import tarfile
+
+          chunks = sorted(Path('.bootstrap/runtime-b64').glob('part-*'))
+          if not chunks:
+              raise SystemExit('No runtime chunks found')
+
+          data = b''.join(path.read_bytes() for path in chunks)
+          archive = Path('/tmp/amuda-runtime.tar.xz')
+          archive.write_bytes(base64.b64decode(data, validate=True))
+          with tarfile.open(archive, 'r:xz') as handle:
+              handle.extractall('.')
+          PY
+
+      - name: Commit extracted source
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add app main.py requirements.txt requirements-dev.txt pytest.ini .gitignore railway.json README.md || true
+          if git diff --cached --quiet; then
+            echo "No source changes to commit"
+          else
+            git commit -m "Publish extracted application source"
+            git push origin main
+          fi
