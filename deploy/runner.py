@@ -24,6 +24,7 @@ from app.services.scheduler import schedule_expiry_watch
 
 
 logger = logging.getLogger(__name__)
+TELEGRAM_ERRORS = (TelegramNetworkError, TelegramServerError, asyncio.TimeoutError)
 
 
 async def _best_effort_telegram_call(
@@ -37,7 +38,7 @@ async def _best_effort_telegram_call(
         try:
             await operation()
             return True
-        except (TelegramNetworkError, TelegramServerError, asyncio.TimeoutError) as exc:
+        except TELEGRAM_ERRORS as exc:
             if attempt >= attempts:
                 logger.warning(
                     "%s failed after %s attempts; continuing startup: %s",
@@ -71,11 +72,13 @@ def build_dispatcher() -> Dispatcher:
     return dispatcher
 
 
-async def _prepare_runtime(bot: Bot, db: Database, owner_ids: tuple[int, ...]) -> None:
+async def _prepare_database(db: Database, owner_ids: tuple[int, ...]) -> None:
     await db.init()
     async with db.session_factory() as session:
         await sync_owner_admins(session, owner_ids)
 
+
+async def _configure_telegram(bot: Bot) -> None:
     commands = [
         BotCommand(command="start", description="فتح البوت"),
         BotCommand(command="admin", description="لوحة الإدارة"),
@@ -83,6 +86,12 @@ async def _prepare_runtime(bot: Bot, db: Database, owner_ids: tuple[int, ...]) -
     await _best_effort_telegram_call(
         "Setting Telegram bot commands",
         lambda: bot.set_my_commands(commands),
+        attempts=1,
+    )
+    await _best_effort_telegram_call(
+        "Deleting an old Telegram webhook",
+        lambda: bot.delete_webhook(drop_pending_updates=False),
+        attempts=1,
     )
 
 
@@ -91,30 +100,59 @@ async def run_polling() -> None:
     settings.validate_runtime()
     db = Database(settings)
     gemini_reader = GeminiScheduleReader(settings.gemini_api_key, settings.gemini_model)
-    bot = Bot(settings.bot_token, default=DefaultBotProperties(parse_mode=ParseMode.HTML))
     dispatcher = build_dispatcher()
-    watch_task: asyncio.Task[None] | None = None
+    await _prepare_database(db, settings.owner_ids)
 
+    retry_delay = 5
     try:
-        await _prepare_runtime(bot, db, settings.owner_ids)
-        await _best_effort_telegram_call(
-            "Deleting an old Telegram webhook",
-            lambda: bot.delete_webhook(drop_pending_updates=False),
-        )
-        watch_task = asyncio.create_task(schedule_expiry_watch(bot, db, settings))
-        logger.info("Starting Telegram long polling")
-        await dispatcher.start_polling(
-            bot,
-            db=db,
-            settings=settings,
-            gemini_reader=gemini_reader,
-            allowed_updates=dispatcher.resolve_used_update_types(),
-        )
+        while True:
+            bot = Bot(
+                settings.bot_token,
+                default=DefaultBotProperties(parse_mode=ParseMode.HTML),
+            )
+            watch_task: asyncio.Task[None] | None = None
+            try:
+                logger.info("Checking Telegram API connection")
+                bot_info = await bot.get_me()
+                logger.info(
+                    "Telegram API connected as @%s",
+                    bot_info.username or bot_info.id,
+                )
+                await _configure_telegram(bot)
+
+                watch_task = asyncio.create_task(
+                    schedule_expiry_watch(bot, db, settings)
+                )
+                logger.info("Starting Telegram long polling")
+                retry_delay = 5
+                await dispatcher.start_polling(
+                    bot,
+                    db=db,
+                    settings=settings,
+                    gemini_reader=gemini_reader,
+                    allowed_updates=dispatcher.resolve_used_update_types(),
+                    handle_signals=False,
+                    close_bot_session=False,
+                )
+                logger.warning(
+                    "Telegram polling stopped unexpectedly; reconnecting in %ss",
+                    retry_delay,
+                )
+            except TELEGRAM_ERRORS as exc:
+                logger.warning(
+                    "Telegram API/polling unavailable: %s; reconnecting in %ss",
+                    exc,
+                    retry_delay,
+                )
+            finally:
+                if watch_task is not None:
+                    watch_task.cancel()
+                    await asyncio.gather(watch_task, return_exceptions=True)
+                await bot.session.close()
+
+            await asyncio.sleep(retry_delay)
+            retry_delay = min(retry_delay * 2, 60)
     finally:
-        if watch_task is not None:
-            watch_task.cancel()
-            await asyncio.gather(watch_task, return_exceptions=True)
-        await bot.session.close()
         await db.dispose()
 
 
@@ -130,7 +168,8 @@ async def run_webhook() -> None:
         settings=settings,
         gemini_reader=gemini_reader,
     )
-    await _prepare_runtime(bot, db, settings.owner_ids)
+    await _prepare_database(db, settings.owner_ids)
+    await _configure_telegram(bot)
     await bot.set_webhook(
         settings.webhook_url,
         secret_token=settings.webhook_secret,
