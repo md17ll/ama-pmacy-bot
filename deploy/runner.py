@@ -18,6 +18,7 @@ from aiogram.webhook.aiohttp_server import SimpleRequestHandler, setup_applicati
 from app.config import get_settings
 from app.db import Database
 from app.handlers import admin, admins, exports, imports, pharmacies, shifts, user
+from app.middlewares import AntiSpamMiddleware
 from app.repositories import sync_owner_admins
 from app.services.gemini import GeminiScheduleReader
 from app.services.scheduler import schedule_expiry_watch
@@ -62,6 +63,10 @@ async def _best_effort_telegram_call(
 
 def build_dispatcher() -> Dispatcher:
     dispatcher = Dispatcher(storage=MemoryStorage())
+    anti_spam = AntiSpamMiddleware()
+    dispatcher.message.outer_middleware(anti_spam)
+    dispatcher.callback_query.outer_middleware(anti_spam)
+
     dispatcher.include_router(imports.router)
     dispatcher.include_router(pharmacies.router)
     dispatcher.include_router(shifts.router)

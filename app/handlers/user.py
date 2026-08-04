@@ -7,7 +7,7 @@ from aiogram.filters import CommandObject, CommandStart
 from aiogram.fsm.context import FSMContext
 from aiogram.types import CallbackQuery, Message
 
-from app import callbacks as cb, keyboards, repositories, texts
+from app import callbacks as cb, keyboards, public_keyboards, repositories, texts
 from app.config import Settings
 from app.db import Database
 from app.states import UserSearchState
@@ -25,10 +25,10 @@ async def _render_home(target: CallbackQuery | Message, db: Database, settings: 
         last_update = await repositories.latest_published_at(session)
     text = texts.user_home_text(now, settings.timezone, last_update)
     if isinstance(target, CallbackQuery):
-        await safe_edit(target, text, keyboards.user_home(admin))
+        await safe_edit(target, text, public_keyboards.user_home(admin))
         await answer_callback(target)
     else:
-        await target.answer(text, reply_markup=keyboards.user_home(admin))
+        await target.answer(text, reply_markup=public_keyboards.user_home(admin))
 
 
 @router.message(CommandStart())
@@ -108,6 +108,7 @@ async def _show_period(
     *,
     offset_days: int,
     title: str,
+    refresh_callback: str,
 ) -> None:
     now = utcnow()
     local_day = now.astimezone(settings.timezone).date() + timedelta(days=offset_days)
@@ -119,7 +120,11 @@ async def _show_period(
             callback.from_user.id,
             "view_today" if offset_days == 0 else "view_tomorrow",
         )
-    await safe_edit(callback, texts.shifts_text(title, shifts, now, settings.timezone), keyboards.user_results())
+    await safe_edit(
+        callback,
+        texts.shifts_text(title, shifts, now, settings.timezone),
+        public_keyboards.user_results(shifts, refresh_callback=refresh_callback),
+    )
     await answer_callback(callback)
 
 
@@ -132,7 +137,7 @@ async def current_shifts_handler(callback: CallbackQuery, db: Database, settings
     await safe_edit(
         callback,
         texts.shifts_text("🌙 <b>الصيدليات المناوبة الآن</b>", shifts, now, settings.timezone),
-        keyboards.user_results(),
+        public_keyboards.user_results(shifts, refresh_callback=cb.USER_NOW),
     )
     await answer_callback(callback)
 
@@ -145,6 +150,7 @@ async def today_shifts_handler(callback: CallbackQuery, db: Database, settings: 
         settings,
         offset_days=0,
         title="📅 <b>صيدليات اليوم</b>",
+        refresh_callback=cb.USER_TODAY,
     )
 
 
@@ -156,7 +162,28 @@ async def tomorrow_shifts_handler(callback: CallbackQuery, db: Database, setting
         settings,
         offset_days=1,
         title="⏭ <b>صيدليات غداً</b>",
+        refresh_callback=cb.USER_TOMORROW,
     )
+
+
+@router.callback_query(F.data.startswith("u:pinfo:"))
+async def pharmacy_info_handler(callback: CallbackQuery, db: Database) -> None:
+    try:
+        pharmacy_id = int((callback.data or "").rsplit(":", maxsplit=1)[-1])
+    except (TypeError, ValueError):
+        await answer_callback(callback, "تعذر فتح بيانات الصيدلية.", alert=True)
+        return
+
+    async with db.session_factory() as session:
+        pharmacy = await repositories.get_pharmacy(session, pharmacy_id)
+
+    if pharmacy is None:
+        await answer_callback(callback, "الصيدلية غير موجودة.", alert=True)
+        return
+
+    address = pharmacy.address.strip() if pharmacy.address else "العنوان غير مضاف"
+    info = f"💊 {pharmacy.name}\n📍 {address}"
+    await answer_callback(callback, info[:190], alert=True)
 
 
 @router.callback_query(F.data == cb.USER_SEARCH)

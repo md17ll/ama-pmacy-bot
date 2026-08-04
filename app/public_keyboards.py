@@ -1,0 +1,58 @@
+from __future__ import annotations
+
+from collections.abc import Iterable
+
+from aiogram.enums import ButtonStyle
+from aiogram.types import InlineKeyboardMarkup
+
+from app import callbacks as cb
+from app.keyboards import button, keyboard
+from app.models import Shift
+
+
+def user_home(is_admin: bool = False) -> InlineKeyboardMarkup:
+    """Public home keyboard with the requested button colors."""
+    rows = [
+        [button("🌙 الصيدليات المناوبة الآن", cb.USER_NOW, ButtonStyle.PRIMARY)],
+        [
+            button("📅 صيدليات اليوم", cb.USER_TODAY, ButtonStyle.SUCCESS),
+            button("⏭ صيدليات غداً", cb.USER_TOMORROW, ButtonStyle.SUCCESS),
+        ],
+        [button("🔍 البحث عن صيدلية", cb.USER_SEARCH, ButtonStyle.PRIMARY)],
+        [button("🔄 تحديث الوقت", cb.USER_REFRESH, ButtonStyle.DANGER)],
+    ]
+    if is_admin:
+        rows.append([button("⚙️ لوحة الإدارة", cb.ADMIN_HOME, ButtonStyle.PRIMARY)])
+    return keyboard(rows)
+
+
+def user_results(
+    shifts: Iterable[Shift],
+    *,
+    refresh_callback: str,
+) -> InlineKeyboardMarkup:
+    """Show pharmacy names followed only by a contextual refresh button."""
+    rows = []
+    seen_pharmacy_ids: set[int] = set()
+
+    for shift in shifts:
+        pharmacy = shift.pharmacy
+        if pharmacy.id in seen_pharmacy_ids:
+            continue
+        seen_pharmacy_ids.add(pharmacy.id)
+        rows.append(
+            [
+                button(
+                    f"💊 {pharmacy.name}",
+                    f"u:pinfo:{pharmacy.id}",
+                    ButtonStyle.PRIMARY,
+                )
+            ]
+        )
+        if len(seen_pharmacy_ids) >= 20:
+            break
+
+    rows.append(
+        [button("🔄 تحديث الوقت", refresh_callback, ButtonStyle.DANGER)]
+    )
+    return keyboard(rows)
