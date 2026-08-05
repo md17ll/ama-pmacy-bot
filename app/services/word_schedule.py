@@ -93,11 +93,20 @@ def _date_from_cell(value: str):
     return parse_date_value(re.sub(r"\s+", "", match.group(0)))
 
 
-def parse_amuda_word_schedule(data: bytes) -> tuple[list[ParsedShift], list[str]]:
+def parse_amuda_word_schedule(
+    data: bytes,
+    *,
+    default_day_start: time = DEFAULT_DAY_START,
+    default_day_end: time = DEFAULT_DAY_END,
+    default_evening_start: time = DEFAULT_EVENING_START,
+    default_evening_end: time = DEFAULT_EVENING_END,
+) -> tuple[list[ParsedShift], list[str]]:
     """Parse the official two-period Amuda pharmacy schedule Word layout.
 
     Every group of three columns is interpreted as:
     date | daytime pharmacy | evening pharmacy.
+    Header times override the supplied defaults. The defaults are used only
+    when a file omits or contains an unreadable time range in its header.
     """
     _validate_docx_archive(data)
     try:
@@ -126,12 +135,12 @@ def parse_amuda_word_schedule(data: bytes) -> tuple[list[ParsedShift], list[str]
             day_range = _range_from_header(
                 header[base + 1],
                 evening=False,
-                fallback=(DEFAULT_DAY_START, DEFAULT_DAY_END),
+                fallback=(default_day_start, default_day_end),
             )
             evening_range = _range_from_header(
                 header[base + 2],
                 evening=True,
-                fallback=(DEFAULT_EVENING_START, DEFAULT_EVENING_END),
+                fallback=(default_evening_start, default_evening_end),
             )
             periods.append((*day_range, *evening_range))
 
