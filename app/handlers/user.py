@@ -23,12 +23,21 @@ async def _render_home(target: CallbackQuery | Message, db: Database, settings: 
     async with db.session_factory() as session:
         admin = await repositories.is_admin(session, target.from_user.id)
         last_update = await repositories.latest_published_at(session)
+        premium_emoji_id = await repositories.get_setting(
+            session,
+            "developer_button_emoji_id",
+            None,
+        )
     text = texts.user_home_text(now, settings.timezone, last_update)
+    markup = public_keyboards.user_home(
+        admin,
+        str(premium_emoji_id) if premium_emoji_id else None,
+    )
     if isinstance(target, CallbackQuery):
-        await safe_edit(target, text, public_keyboards.user_home(admin))
+        await safe_edit(target, text, markup)
         await answer_callback(target)
     else:
-        await target.answer(text, reply_markup=public_keyboards.user_home(admin))
+        await target.answer(text, reply_markup=markup)
 
 
 @router.message(CommandStart())
