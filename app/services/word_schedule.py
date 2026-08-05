@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import re
 import zipfile
+from dataclasses import replace
 from datetime import time
 from io import BytesIO
 
@@ -196,6 +197,9 @@ def parse_amuda_word_schedule(data: bytes) -> tuple[list[ParsedShift], list[str]
         raise ValueError(
             "لم أجد جدولاً مطابقاً للنظام: التاريخ | النهارية | المساء"
         )
+
+    parsed.sort(key=lambda item: (item.duty_date, item.start_time, item.pharmacy_name))
+    parsed = [replace(item, row_number=index) for index, item in enumerate(parsed, start=1)]
 
     dates = {item.duty_date for item in parsed}
     if len(dates) * 2 != len(parsed):
