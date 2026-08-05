@@ -1,10 +1,9 @@
-name: Apply hardening audit
+name: Apply async repository fix
 
 on:
   push:
     branches: [main]
     paths:
-      - ".github/scripts/harden_bot.py.zlib-b64/part-*"
       - ".github/workflows/apply-hardening.yml"
   workflow_dispatch:
 
@@ -12,56 +11,45 @@ permissions:
   contents: write
 
 jobs:
-  harden:
+  patch:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
         with:
           fetch-depth: 0
 
-      - name: Rebuild and apply audited fixes
+      - name: Fix async alias loading before audit serialization
         run: |
           python - <<'PY'
           from pathlib import Path
-          import base64
-          import hashlib
-          import zlib
 
-          parts = sorted(Path('.github/scripts/harden_bot.py.zlib-b64').glob('part-*'))
-          payload = ''.join(path.read_text(encoding='utf-8').strip() for path in parts)
-          compressed = base64.b64decode(payload, validate=True)
-          if hashlib.sha256(compressed).hexdigest() != '16cb93143494fcf1bc1e63f2d2bc7f016782ed0e19766f98f011576650de5875':
-              raise SystemExit('Hardening payload checksum mismatch')
-          script = zlib.decompress(compressed)
-          if hashlib.sha256(script).hexdigest() != '1f9d573afd80e56d365fbcc7938af1e8cfa0e84afbd90ed4908eeb91c3e2657b':
-              raise SystemExit('Hardening script checksum mismatch')
-          script = script.replace(b'if count != 1:', b'if count < 1:', 1)
-          target = Path('scripts/harden_bot.py')
-          target.parent.mkdir(parents=True, exist_ok=True)
-          target.write_bytes(script)
-          compile(script, str(target), 'exec')
+          path = Path("app/repositories.py")
+          text = path.read_text(encoding="utf-8")
+          old = '''    session.add(
+              AuditLog(
+                  admin_id=admin_id,
+                  action="pharmacy_create",
+          '''
+          new = '''    await session.refresh(pharmacy, attribute_names=["aliases"])
+              session.add(
+              AuditLog(
+                  admin_id=admin_id,
+                  action="pharmacy_create",
+          '''
+          if old not in text:
+              raise SystemExit("Expected create_pharmacy audit block was not found")
+          path.write_text(text.replace(old, new, 1), encoding="utf-8")
           PY
-          python scripts/harden_bot.py
 
-      - name: Verify patched source compiles
+      - name: Verify source compiles
         env:
           PYTHONDONTWRITEBYTECODE: "1"
         run: python -m compileall -q app main.py tests
 
-      - name: Clean generated Python artifacts
-        run: |
-          find app tests -type d -name __pycache__ -prune -exec rm -rf {} +
-          find app tests -type f -name '*.pyc' -delete
-          rm -rf scripts
-
-      - name: Commit hardening changes
+      - name: Commit repository fix
         run: |
           git config user.name "github-actions[bot]"
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
-          git add app tests Dockerfile
-          if git diff --cached --quiet; then
-            echo "No hardening changes to commit"
-          else
-            git commit -m "Harden bot and expand regression security tests"
-            git push origin main
-          fi
+          git add app/repositories.py
+          git commit -m "Fix async pharmacy audit serialization"
+          git push origin main
