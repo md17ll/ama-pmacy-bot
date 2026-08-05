@@ -11,6 +11,7 @@ from app.config import Settings
 from app.db import Database
 from app.handlers.common import require_writer
 from app.services.importer import prepare_import_rows
+from app.services.pharmacy_autocreate import create_missing_pharmacy_names
 from app.services.word_schedule import MAX_DOCX_BYTES, parse_amuda_word_schedule
 from app.states import AdminImportState
 from app.telegram_utils import answer_callback, safe_edit, try_delete
@@ -43,9 +44,10 @@ async def word_prompt(callback: CallbackQuery, db: Database, state: FSMContext) 
             stats=[
                 "☀️ النهارية: تُقرأ من الوقت المكتوب في رأس الجدول.",
                 "🌙 المسائية: تُقرأ من الوقت المكتوب في رأس الجدول.",
+                "🏥 أسماء الصيدليات الجديدة تُحفظ تلقائياً.",
                 "↔️ يدعم وجود مجموعتين من التواريخ جنب بعض في الصفحة.",
             ],
-            warning="سطر الدوام العام 5:00–8:30 لا يُسجل كمناوبة.",
+            warning="العناوين غير الموجودة تبقى فارغة وتظهر في قسم بيانات ناقصة لتعديلها لاحقاً.",
         ),
         keyboards.simple_back(cb.ADMIN_IMPORT),
     )
@@ -71,12 +73,27 @@ async def word_receive_document(
         await message.answer("حجم ملف Word أكبر من الحد المسموح.")
         return
 
-    status = await message.answer("⏳ جاري قراءة جدول Word ومطابقة الصيدليات…")
+    status = await message.answer("⏳ جاري قراءة جدول Word وحفظ أسماء الصيدليات…")
+    auto_created = 0
     try:
         data = await _download_file(bot, document.file_id)
         parsed_rows, warnings = parse_amuda_word_schedule(data)
         async with db.session_factory() as session:
             prepared = await prepare_import_rows(session, parsed_rows, settings.timezone)
+            missing_names = [
+                row["raw_pharmacy_name"]
+                for row in prepared
+                if not row.get("matched_pharmacy_id")
+            ]
+            if missing_names:
+                auto_created, _ = await create_missing_pharmacy_names(
+                    session,
+                    missing_names,
+                    admin_id=message.from_user.id,
+                    source_note=f"أضيفت تلقائياً من جدول Word: {filename}",
+                )
+                prepared = await prepare_import_rows(session, parsed_rows, settings.timezone)
+
             batch = await repositories.create_import_batch(
                 session,
                 source_type="word",
@@ -94,13 +111,18 @@ async def word_receive_document(
         )
         return
 
-    warning_text = ""
+    details = ""
+    if auto_created:
+        details += (
+            f"\n\n🏥 تم حفظ {auto_created} اسم صيدلية جديد تلقائياً."
+            "\n📍 أضف عناوينها من: إدارة الصيدليات ← بيانات ناقصة."
+        )
     if warnings:
-        warning_text = "\n\n⚠️ ملاحظات ملف Word:\n" + "\n".join(
+        details += "\n\n⚠️ ملاحظات ملف Word:\n" + "\n".join(
             f"• {item}" for item in warnings[:8]
         )
     await status.edit_text(
-        texts.batch_summary_text(batch) + warning_text,
+        texts.batch_summary_text(batch) + details,
         reply_markup=keyboards.draft_detail(batch.id),
     )
     await try_delete(message)
