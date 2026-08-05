@@ -1,3 +1,4 @@
+# Python, test, local database, and secret artifacts
 __pycache__/
 *.py[cod]
 .pytest_cache/
