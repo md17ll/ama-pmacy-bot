@@ -13,6 +13,10 @@ from app.utils import (
 )
 
 
+def _period_label(start: datetime) -> str:
+    return "☀️ مناوبة نهارية" if start.hour < 18 else "🌙 مناوبة مسائية"
+
+
 def user_home_text(now: datetime, timezone, last_update: datetime | None = None) -> str:
     local = as_local(now, timezone)
     update_line = (
@@ -49,6 +53,7 @@ def shifts_text(title: str, shifts: Iterable[Shift], now: datetime, timezone) ->
                 "",
                 "━━━━━━━━━━━━━━",
                 f"💊 <b>{html(shift.pharmacy.name)}</b>",
+                f"{_period_label(start)}",
                 f"🕐 {format_time_ar(start)} – {format_time_ar(end)}",
                 f"📍 {html(shift.pharmacy.address)}",
             ]
@@ -75,6 +80,7 @@ def pharmacy_result_text(pharmacy: Pharmacy, next_shift: Shift | None, now: date
                 [
                     "",
                     "🟢 <b>مناوبة الآن</b>",
+                    f"{_period_label(start)}",
                     f"📅 {format_date_ar(start)}",
                     f"🕐 {format_time_ar(start)} – {format_time_ar(end)}",
                     f"⏳ تنتهي بعد {format_duration(next_shift.end_at - now)}",
@@ -85,6 +91,7 @@ def pharmacy_result_text(pharmacy: Pharmacy, next_shift: Shift | None, now: date
                 [
                     "",
                     "📅 <b>المناوبة القادمة</b>",
+                    f"{_period_label(start)}",
                     format_date_ar(start),
                     f"🕐 {format_time_ar(start)} – {format_time_ar(end)}",
                 ]
@@ -140,14 +147,14 @@ def admin_home_text(stats: dict, now: datetime, timezone) -> str:
 def batch_summary_text(batch: ImportBatch) -> str:
     summary = batch.summary or {}
     source = (
-    "GPT-5.4 Mini عبر OpenRouter"
-    if batch.source_type == "gemini"
-    else "Word الرسمي"
-    if batch.source_type == "word"
-    else "Excel"
-    if batch.source_type == "excel"
-    else "يدوي"
-)
+        "GPT-5.4 Mini عبر OpenRouter"
+        if batch.source_type == "gemini"
+        else "Word الرسمي"
+        if batch.source_type == "word"
+        else "Excel"
+        if batch.source_type == "excel"
+        else "يدوي"
+    )
     lines = [
         f"📝 <b>مسودة رقم {batch.id}</b>",
         "",
@@ -173,6 +180,8 @@ def batch_rows_preview(batch: ImportBatch, timezone, only_errors: bool = False, 
         pharmacy = row.matched_pharmacy.name if row.matched_pharmacy else row.raw_pharmacy_name
         lines.append(f"• السطر {row.row_number}: <b>{html(pharmacy)}</b>")
         if row.start_at and row.end_at:
+            start = as_local(row.start_at, timezone)
+            lines.append(f"  {_period_label(start)}")
             lines.append(
                 f"  {format_date_ar(row.start_at, timezone)} | {format_time_ar(row.start_at, timezone)} – {format_time_ar(row.end_at, timezone)}"
             )
