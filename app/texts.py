@@ -55,7 +55,7 @@ def shifts_text(title: str, shifts: Iterable[Shift], now: datetime, timezone) ->
                 f"💊 <b>{html(shift.pharmacy.name)}</b>",
                 f"{_period_label(start)}",
                 f"🕐 {format_time_ar(start)} – {format_time_ar(end)}",
-                f"📍 {html(shift.pharmacy.address)}",
+                f"📍 {html(shift.pharmacy.address or 'العنوان غير مضاف بعد')}",
             ]
         )
         if shift.start_at <= now < shift.end_at:
@@ -70,7 +70,7 @@ def pharmacy_result_text(pharmacy: Pharmacy, next_shift: Shift | None, now: date
         "🔍 <b>نتيجة البحث</b>",
         "",
         f"💊 <b>{html(pharmacy.name)}</b>",
-        f"📍 {html(pharmacy.address)}",
+        f"📍 {html(pharmacy.address or 'العنوان غير مضاف بعد')}",
     ]
     if next_shift:
         start = as_local(next_shift.start_at, timezone)
@@ -197,7 +197,7 @@ def pharmacy_admin_text(pharmacy: Pharmacy) -> str:
     aliases = "، ".join(alias.alias for alias in pharmacy.aliases) or "لا يوجد"
     return (
         f"💊 <b>{html(pharmacy.name)}</b>\n\n"
-        f"📍 العنوان: {html(pharmacy.address)}\n"
+        f"📍 العنوان: {html(pharmacy.address or 'غير مضاف بعد')}\n"
         f"🔤 الأسماء البديلة: {html(aliases)}\n"
         f"📌 الحالة: {status_ar(pharmacy.status)}\n"
         f"📝 الملاحظات: {html(pharmacy.notes or 'لا يوجد')}"

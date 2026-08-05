@@ -171,27 +171,45 @@ def admin_pharmacies() -> InlineKeyboardMarkup:
 
 
 def pharmacy_list(pharmacies: list[Pharmacy]) -> InlineKeyboardMarkup:
-    rows = [[button(f"💊 {pharmacy.name}", f"a:p:view:{pharmacy.id}")] for pharmacy in pharmacies[:30]]
+    rows: list[list[InlineKeyboardButton]] = []
+    for pharmacy in pharmacies[:100]:
+        icon = "⚠️" if not pharmacy.address.strip() else "💊"
+        rows.append([button(f"{icon} {pharmacy.name}", f"a:p:view:{pharmacy.id}")])
     rows.append([button("➕ إضافة صيدلية", cb.ADMIN_PHARMACY_ADD, ButtonStyle.SUCCESS)])
     rows.append([button("⬅️ رجوع", cb.ADMIN_PHARMACIES)])
     return keyboard(rows)
 
 
 def pharmacy_detail(pharmacy_id: int, status: str) -> InlineKeyboardMarkup:
-    status_text = "⏸ إيقاف مؤقت" if status == "active" else "✅ تفعيل"
     return keyboard(
         [
             [
                 button("✏️ تعديل الاسم", f"a:p:edit:{pharmacy_id}:name"),
                 button("📍 تعديل العنوان", f"a:p:edit:{pharmacy_id}:address"),
             ],
-            [button("🔤 تعديل الأسماء البديلة", f"a:p:edit:{pharmacy_id}:aliases")],
-            [button(status_text, f"a:p:toggle:{pharmacy_id}")],
+            [
+                button("🔤 تعديل الأسماء البديلة", f"a:p:edit:{pharmacy_id}:aliases"),
+                button("📝 تعديل الملاحظات", f"a:p:edit:{pharmacy_id}:notes"),
+            ],
+            [button("📌 تعديل الحالة", f"a:p:status_menu:{pharmacy_id}", ButtonStyle.PRIMARY)],
             [button("🗑 حذف الصيدلية", f"a:p:delete_ask:{pharmacy_id}", ButtonStyle.DANGER)],
             [button("⬅️ رجوع", cb.ADMIN_PHARMACIES)],
         ]
     )
 
+
+def pharmacy_status(pharmacy_id: int, current: str) -> InlineKeyboardMarkup:
+    def label(status: str, text: str) -> str:
+        return f"✅ {text}" if current == status else text
+
+    return keyboard(
+        [
+            [button(label("active", "🟢 فعالة"), f"a:p:status:{pharmacy_id}:active", ButtonStyle.SUCCESS)],
+            [button(label("temporarily_closed", "⏸ مغلقة مؤقتاً"), f"a:p:status:{pharmacy_id}:temporarily_closed")],
+            [button(label("inactive", "🚫 متوقفة"), f"a:p:status:{pharmacy_id}:inactive", ButtonStyle.DANGER)],
+            [button("⬅️ رجوع", f"a:p:view:{pharmacy_id}")],
+        ]
+    )
 
 def confirm_pharmacy_delete(pharmacy_id: int) -> InlineKeyboardMarkup:
     return keyboard(
@@ -218,7 +236,14 @@ def draft_detail(batch_id: int) -> InlineKeyboardMarkup:
             ],
             [
                 button(
-                    "➕ تجهيز الصيدليات الناقصة",
+                    "🏥 حفظ أسماء الصيدليات تلقائياً",
+                    f"a:d:auto_pharmacies:{batch_id}",
+                    ButtonStyle.SUCCESS,
+                )
+            ],
+            [
+                button(
+                    "📊 إضافة الصيدليات والعناوين عبر Excel",
                     f"a:d:missing:{batch_id}",
                     ButtonStyle.PRIMARY,
                 )
@@ -229,7 +254,6 @@ def draft_detail(batch_id: int) -> InlineKeyboardMarkup:
             [button("⬅️ رجوع", cb.ADMIN_DRAFTS)],
         ]
     )
-
 
 def confirm_publish(batch_id: int, mode: str) -> InlineKeyboardMarkup:
     return keyboard(
