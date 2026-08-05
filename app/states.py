@@ -38,6 +38,18 @@ class ShiftSearchState(StatesGroup):
     waiting_query = State()
 
 
+class ShiftSwapState(StatesGroup):
+    waiting_date = State()
+
+
+class ShiftTimeSettingsState(StatesGroup):
+    waiting_day_start = State()
+    waiting_day_end = State()
+    waiting_evening_start = State()
+    waiting_evening_end = State()
+    waiting_effective_date = State()
+
+
 class DeletePeriodState(StatesGroup):
     waiting_start = State()
     waiting_end = State()
