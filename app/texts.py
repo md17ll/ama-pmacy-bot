@@ -66,7 +66,6 @@ def pharmacy_result_text(pharmacy: Pharmacy, next_shift: Shift | None, now: date
         "",
         f"💊 <b>{html(pharmacy.name)}</b>",
         f"📍 {html(pharmacy.address)}",
-        f"📌 الحالة: {status_ar(pharmacy.status)}",
     ]
     if next_shift:
         start = as_local(next_shift.start_at, timezone)
