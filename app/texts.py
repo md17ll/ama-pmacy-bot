@@ -17,20 +17,47 @@ def _period_label(start: datetime) -> str:
     return "☀️ مناوبة نهارية" if start.hour < 18 else "🌙 مناوبة مسائية"
 
 
-def user_home_text(now: datetime, timezone, last_update: datetime | None = None) -> str:
+def user_home_text(
+    now: datetime,
+    timezone,
+    current_shifts: Iterable[Shift] = (),
+) -> str:
     local = as_local(now, timezone)
-    update_line = (
-        f"\n✅ آخر تحديث للجدول: {format_date_ar(last_update, timezone)}، {format_time_ar(last_update, timezone)}"
-        if last_update
-        else "\n⚠️ لم يتم نشر جدول مناوبات حتى الآن."
-    )
-    return (
-        "💊 <b>صيدليات عامودا المناوبة</b>\n\n"
-        f"📅 {format_date_ar(local)}\n"
-        f"🕐 الوقت الآن: {format_time_ar(local)}"
-        f"{update_line}\n\n"
-        "اختر الخدمة المطلوبة من الأزرار:"
-    )
+    shifts = list(current_shifts)
+    lines = [
+        "💊 <b>صيدليات عامودا المناوبة</b>",
+        "",
+        f"📅 {format_date_ar(local)}",
+        f"🕐 الوقت الآن: {format_time_ar(local)}",
+        "",
+    ]
+
+    if not shifts:
+        lines.extend(
+            [
+                "⚪ <b>لا توجد صيدلية مناوبة الآن</b>",
+                "اضغط زر التحديث لاحقاً للتحقق من المناوبة.",
+            ]
+        )
+    else:
+        lines.append("🟢 <b>الصيدلية المناوبة الآن</b>")
+        for index, shift in enumerate(shifts):
+            start = as_local(shift.start_at, timezone)
+            end = as_local(shift.end_at, timezone)
+            if index:
+                lines.append("━━━━━━━━━━━━━━")
+            lines.extend(
+                [
+                    f"💊 <b>{html(shift.pharmacy.name)}</b>",
+                    _period_label(start),
+                    f"🕐 {format_time_ar(start)} – {format_time_ar(end)}",
+                    f"📍 {html(shift.pharmacy.address or 'العنوان غير مضاف بعد')}",
+                    f"⏳ تنتهي بعد {format_duration(shift.end_at - now)}",
+                ]
+            )
+
+    lines.extend(["", "اختر الخدمة المطلوبة أو اضغط زر التحديث:"])
+    return "\n".join(lines)
 
 
 def shifts_text(title: str, shifts: Iterable[Shift], now: datetime, timezone) -> str:
