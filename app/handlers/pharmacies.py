@@ -109,12 +109,12 @@ async def pharmacy_list_handler(callback: CallbackQuery, db: Database) -> None:
     if await require_admin(callback, db) is None:
         return
     async with db.session_factory() as session:
-        pharmacies = await repositories.list_pharmacies(session, limit=100)
+        pharmacies = await repositories.list_pharmacies(session, limit=500)
     await safe_edit(
         callback,
         texts.admin_section_text(
             "جميع الصيدليات",
-            "اضغط على اسم الصيدلية لعرض بياناتها وتعديلها.",
+            "اضغط على اسم الصيدلية لعرض جميع بياناتها وتعديلها.",
             stats=[f"🏥 الصيدليات المعروضة: {len(pharmacies)}"],
         ),
         keyboards.pharmacy_list(pharmacies),
@@ -127,11 +127,11 @@ async def pharmacy_incomplete_handler(callback: CallbackQuery, db: Database) -> 
     if await require_admin(callback, db) is None:
         return
     async with db.session_factory() as session:
-        pharmacies = await repositories.list_pharmacies(session, limit=500)
+        pharmacies = await repositories.list_pharmacies(session, limit=1000)
     incomplete = [p for p in pharmacies if not p.address.strip() or not p.name.strip()]
     text = texts.admin_section_text(
         "بيانات الصيدليات الناقصة",
-        "يعرض الصيدليات التي ينقصها اسم أو عنوان. بيانات العنوان ضرورية لعرض المناوبة للمستخدم.",
+        "اضغط على أي صيدلية لإضافة عنوانها أو تعديل الاسم والأسماء البديلة والحالة والملاحظات.",
         stats=[f"⚠️ النتائج: {len(incomplete)}"],
     )
     if not incomplete:
@@ -164,10 +164,10 @@ async def pharmacy_search_result(
 ) -> None:
     data = await state.get_data()
     async with db.session_factory() as session:
-        pharmacies = await repositories.search_pharmacies(session, message.text or "", limit=20)
+        pharmacies = await repositories.search_pharmacies(session, message.text or "", limit=30)
     text = texts.admin_section_text(
         "نتيجة بحث الصيدليات",
-        "اختر الصيدلية لفتح بياناتها.",
+        "اختر الصيدلية لفتح بياناتها وتعديلها.",
         stats=[f"🔍 النتائج: {len(pharmacies)}"],
     )
     await _edit_state_message(
@@ -212,6 +212,7 @@ async def pharmacy_edit_prompt(
         "name": "أرسل الاسم الرسمي الجديد للصيدلية.",
         "address": "أرسل العنوان الجديد للصيدلية.",
         "aliases": "أرسل الأسماء البديلة مفصولة بفواصل، أو أرسل كلمة لا لحذفها.",
+        "notes": "أرسل ملاحظات الصيدلية، أو أرسل كلمة لا لحذف الملاحظات.",
     }
     if field not in prompts:
         await answer_callback(callback, "نوع التعديل غير معروف.", alert=True)
@@ -241,13 +242,19 @@ async def pharmacy_edit_value(
 ) -> None:
     data = await state.get_data()
     value = (message.text or "").strip()
+    field = data["field"]
     kwargs = {}
-    if data["field"] == "aliases":
+    if field == "aliases":
         kwargs["aliases"] = [] if value in {"لا", "لا يوجد", "بدون"} else [
             item.strip() for item in value.replace("،", ",").split(",") if item.strip()
         ]
+    elif field == "notes":
+        kwargs["notes"] = "" if value in {"لا", "لا يوجد", "بدون"} else value
     else:
-        kwargs[data["field"]] = value
+        if field == "name" and len(value) < 2:
+            await message.answer("اسم الصيدلية قصير جداً.")
+            return
+        kwargs[field] = value
     try:
         async with db.session_factory() as session:
             pharmacy = await repositories.update_pharmacy(
@@ -270,8 +277,56 @@ async def pharmacy_edit_value(
     await state.clear()
 
 
+@router.callback_query(F.data.startswith("a:p:status_menu:"))
+async def pharmacy_status_menu(callback: CallbackQuery, db: Database) -> None:
+    if await require_writer(callback, db) is None:
+        return
+    pharmacy_id = int(callback.data.rsplit(":", 1)[1])
+    async with db.session_factory() as session:
+        pharmacy = await repositories.get_pharmacy(session, pharmacy_id)
+    if pharmacy is None:
+        await answer_callback(callback, "الصيدلية غير موجودة.", alert=True)
+        return
+    await safe_edit(
+        callback,
+        "📌 <b>تعديل حالة الصيدلية</b>\n\nاختر الحالة الجديدة:",
+        keyboards.pharmacy_status(pharmacy.id, pharmacy.status),
+    )
+    await answer_callback(callback)
+
+
+@router.callback_query(F.data.startswith("a:p:status:"))
+async def pharmacy_set_status(callback: CallbackQuery, db: Database) -> None:
+    if await require_writer(callback, db) is None:
+        return
+    parts = (callback.data or "").split(":")
+    if len(parts) != 5:
+        await answer_callback(callback, "بيانات الحالة غير صالحة.", alert=True)
+        return
+    pharmacy_id = int(parts[3])
+    status = parts[4]
+    try:
+        async with db.session_factory() as session:
+            pharmacy = await repositories.update_pharmacy(
+                session,
+                pharmacy_id,
+                admin_id=callback.from_user.id,
+                status=status,
+            )
+    except ValueError as exc:
+        await answer_callback(callback, str(exc), alert=True)
+        return
+    await safe_edit(
+        callback,
+        texts.pharmacy_admin_text(pharmacy),
+        keyboards.pharmacy_detail(pharmacy.id, pharmacy.status),
+    )
+    await answer_callback(callback, "تم تحديث حالة الصيدلية.")
+
+
 @router.callback_query(F.data.startswith("a:p:toggle:"))
 async def pharmacy_toggle(callback: CallbackQuery, db: Database) -> None:
+    """Keep the old callback working for messages sent before this update."""
     if await require_writer(callback, db) is None:
         return
     pharmacy_id = int(callback.data.rsplit(":", 1)[1])
