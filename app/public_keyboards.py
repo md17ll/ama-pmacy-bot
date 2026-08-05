@@ -14,18 +14,23 @@ from app.models import Shift
 DEVELOPER_URL = "https://t.me/md17l"
 
 
-def _developer_button() -> InlineKeyboardButton:
-    premium_emoji_id = os.getenv("PREMIUM_EMOJI_ID", "").strip() or None
-    label = "مطوّر البوت" if premium_emoji_id else "👨‍💻 مطوّر البوت"
+def _developer_button(premium_emoji_id: str | None = None) -> InlineKeyboardButton:
+    configured_emoji_id = (
+        premium_emoji_id or os.getenv("PREMIUM_EMOJI_ID", "")
+    ).strip() or None
+    label = "مطوّر البوت" if configured_emoji_id else "👨‍💻 مطوّر البوت"
     return InlineKeyboardButton(
         text=label,
         url=DEVELOPER_URL,
         style=ButtonStyle.SUCCESS,
-        icon_custom_emoji_id=premium_emoji_id,
+        icon_custom_emoji_id=configured_emoji_id,
     )
 
 
-def user_home(is_admin: bool = False) -> InlineKeyboardMarkup:
+def user_home(
+    is_admin: bool = False,
+    premium_emoji_id: str | None = None,
+) -> InlineKeyboardMarkup:
     """Public home keyboard with the requested button colors."""
     rows = [
         [button("🌙 الصيدليات المناوبة الآن", cb.USER_NOW, ButtonStyle.PRIMARY)],
@@ -38,7 +43,7 @@ def user_home(is_admin: bool = False) -> InlineKeyboardMarkup:
     ]
     if is_admin:
         rows.append([button("⚙️ لوحة الإدارة", cb.ADMIN_HOME, ButtonStyle.PRIMARY)])
-    rows.append([_developer_button()])
+    rows.append([_developer_button(premium_emoji_id)])
     return keyboard(rows)
 
 
