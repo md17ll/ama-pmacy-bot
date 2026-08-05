@@ -20,7 +20,7 @@ def _developer_button() -> InlineKeyboardButton:
     return InlineKeyboardButton(
         text=label,
         url=DEVELOPER_URL,
-        style=ButtonStyle.PRIMARY,
+        style=ButtonStyle.SUCCESS,
         icon_custom_emoji_id=premium_emoji_id,
     )
 
