@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import asyncio
 import base64
 import json
 from datetime import datetime
@@ -15,6 +16,73 @@ MAX_IMAGE_BYTES = 10 * 1024 * 1024
 MAX_GEMINI_ROWS = 500  # Kept for compatibility with existing imports.
 OPENROUTER_TIMEOUT_SECONDS = 90
 OPENROUTER_API_URL = "https://openrouter.ai/api/v1/chat/completions"
+
+# OpenAI strict structured outputs require every property to be listed in
+# "required", even nullable ones. A hand-written schema avoids provider-side
+# validation errors caused by defaults in an auto-generated Pydantic schema.
+OPENROUTER_SCHEDULE_SCHEMA: dict[str, Any] = {
+    "type": "object",
+    "properties": {
+        "rows": {
+            "type": "array",
+            "maxItems": MAX_GEMINI_ROWS,
+            "items": {
+                "type": "object",
+                "properties": {
+                    "pharmacy_name": {
+                        "type": "string",
+                        "description": "اسم الصيدلية كما يظهر في الصورة",
+                    },
+                    "duty_date": {
+                        "type": "string",
+                        "description": "تاريخ المناوبة بصيغة YYYY-MM-DD",
+                    },
+                    "start_time": {
+                        "type": "string",
+                        "description": "وقت بداية المناوبة مع AM أو PM",
+                    },
+                    "end_time": {
+                        "type": "string",
+                        "description": "وقت نهاية المناوبة مع AM أو PM",
+                    },
+                    "confidence": {
+                        "type": "number",
+                        "minimum": 0,
+                        "maximum": 1,
+                    },
+                    "note": {
+                        "anyOf": [
+                            {"type": "string"},
+                            {"type": "null"},
+                        ]
+                    },
+                },
+                "required": [
+                    "pharmacy_name",
+                    "duty_date",
+                    "start_time",
+                    "end_time",
+                    "confidence",
+                    "note",
+                ],
+                "additionalProperties": False,
+            },
+        },
+        "document_language": {
+            "anyOf": [
+                {"type": "string"},
+                {"type": "null"},
+            ]
+        },
+        "warnings": {
+            "type": "array",
+            "maxItems": 50,
+            "items": {"type": "string"},
+        },
+    },
+    "required": ["rows", "document_language", "warnings"],
+    "additionalProperties": False,
+}
 
 
 class GeminiShiftRow(BaseModel):
@@ -38,6 +106,21 @@ class GeminiSchedule(BaseModel):
     rows: list[GeminiShiftRow] = Field(max_length=MAX_GEMINI_ROWS)
     document_language: str | None = Field(default=None, max_length=64)
     warnings: list[str] = Field(default_factory=list, max_length=50)
+
+
+class OpenRouterRequestError(RuntimeError):
+    def __init__(
+        self,
+        message: str,
+        *,
+        status: int,
+        error_type: str | None = None,
+        provider_code: str | None = None,
+    ) -> None:
+        super().__init__(message)
+        self.status = status
+        self.error_type = error_type
+        self.provider_code = provider_code
 
 
 class OpenRouterScheduleReader:
@@ -92,7 +175,13 @@ class OpenRouterScheduleReader:
             raise ValueError("لم يستطع GPT استخراج أي مناوبة صالحة من الصورة")
         return parsed, warnings
 
-    def _request_payload(self, image_bytes: bytes, mime_type: str) -> dict[str, Any]:
+    def _request_payload(
+        self,
+        image_bytes: bytes,
+        mime_type: str,
+        *,
+        strict_schema: bool = True,
+    ) -> dict[str, Any]:
         encoded_image = base64.b64encode(image_bytes).decode("ascii")
         prompt = """
 أنت تقرأ صورة جدول مناوبات صيدليات في مدينة عامودا في سوريا.
@@ -104,8 +193,22 @@ class OpenRouterScheduleReader:
 حوّل الوقت إلى نظام 12 ساعة واكتب AM أو PM بوضوح.
 إذا كانت نهاية المناوبة صباح اليوم التالي، اكتب وقت النهاية الصحيح ولا تغيّر تاريخ البداية؛ النظام سيضيف اليوم التالي.
 لا تخمن قيمة غير واضحة. ضع ملاحظة وتحذيراً ودرجة ثقة منخفضة بدلاً من التخمين.
-أعد النتيجة حصراً وفق JSON Schema المطلوب.
+أعد كائناً بصيغة JSON فقط، يحتوي على المفاتيح rows وdocument_language وwarnings.
+كل عنصر داخل rows يجب أن يحتوي على pharmacy_name وduty_date وstart_time وend_time وconfidence وnote.
 """.strip()
+        response_format: dict[str, Any]
+        if strict_schema:
+            response_format = {
+                "type": "json_schema",
+                "json_schema": {
+                    "name": "amuda_pharmacy_schedule",
+                    "strict": True,
+                    "schema": OPENROUTER_SCHEDULE_SCHEMA,
+                },
+            }
+        else:
+            response_format = {"type": "json_object"}
+
         return {
             "model": self.model,
             "messages": [
@@ -122,19 +225,44 @@ class OpenRouterScheduleReader:
                     ],
                 }
             ],
-            "response_format": {
-                "type": "json_schema",
-                "json_schema": {
-                    "name": "amuda_pharmacy_schedule",
-                    "strict": True,
-                    "schema": GeminiSchedule.model_json_schema(),
-                },
+            "response_format": response_format,
+            "provider": {
+                "require_parameters": True,
+                "allow_fallbacks": True,
             },
-            "max_tokens": 16000,
+            "max_completion_tokens": 8000,
         }
 
     async def _request_schedule(self, image_bytes: bytes, mime_type: str) -> GeminiSchedule:
-        payload = self._request_payload(image_bytes, mime_type)
+        try:
+            data = await self._post_payload(
+                self._request_payload(image_bytes, mime_type, strict_schema=True)
+            )
+        except OpenRouterRequestError as exc:
+            if not self._should_retry_without_schema(exc):
+                raise
+            # Some upstream providers reject otherwise valid strict JSON schemas.
+            # Retry once with JSON mode while keeping the same GPT model, then
+            # validate the returned object locally with Pydantic.
+            data = await self._post_payload(
+                self._request_payload(image_bytes, mime_type, strict_schema=False)
+            )
+
+        try:
+            message = data["choices"][0]["message"]
+            content = message.get("content")
+            refusal = message.get("refusal")
+        except (KeyError, IndexError, TypeError, AttributeError) as exc:
+            raise ValueError("OpenRouter أعاد استجابة غير مفهومة") from exc
+
+        if refusal:
+            raise ValueError(f"النموذج رفض تحليل الصورة: {str(refusal)[:200]}")
+        text = self._extract_text(content)
+        if not text:
+            raise ValueError("OpenRouter لم يُرجع بيانات")
+        return GeminiSchedule.model_validate_json(self._strip_code_fence(text))
+
+    async def _post_payload(self, payload: dict[str, Any]) -> dict[str, Any]:
         timeout = aiohttp.ClientTimeout(total=OPENROUTER_TIMEOUT_SECONDS)
         headers = {
             "Authorization": f"Bearer {self.api_key}",
@@ -150,23 +278,36 @@ class OpenRouterScheduleReader:
                     json=payload,
                 ) as response:
                     body = await response.text()
-                    if response.status != 200:
-                        self._raise_api_error(response.status, body)
-        except TimeoutError as exc:
+                    try:
+                        data = json.loads(body)
+                    except json.JSONDecodeError as exc:
+                        if response.status != 200:
+                            raise OpenRouterRequestError(
+                                f"فشل OpenRouter برمز {response.status}",
+                                status=response.status,
+                            ) from exc
+                        raise ValueError("OpenRouter أعاد استجابة غير مفهومة") from exc
+                    if response.status != 200 or data.get("error"):
+                        raise self._build_api_error(response.status, data)
+                    return data
+        except asyncio.TimeoutError as exc:
             raise RuntimeError("انتهت مهلة تحليل الصورة عبر OpenRouter") from exc
         except aiohttp.ClientError as exc:
             raise RuntimeError("تعذر الاتصال بخدمة OpenRouter") from exc
 
-        try:
-            data = json.loads(body)
-            content = data["choices"][0]["message"]["content"]
-        except (json.JSONDecodeError, KeyError, IndexError, TypeError) as exc:
-            raise ValueError("OpenRouter أعاد استجابة غير مفهومة") from exc
-
-        text = self._extract_text(content)
-        if not text:
-            raise ValueError("OpenRouter لم يُرجع بيانات")
-        return GeminiSchedule.model_validate_json(self._strip_code_fence(text))
+    @staticmethod
+    def _should_retry_without_schema(exc: OpenRouterRequestError) -> bool:
+        if exc.status != 400:
+            return False
+        blocked_types = {
+            "invalid_image",
+            "image_too_large",
+            "image_too_small",
+            "unsupported_image_format",
+            "content_policy_violation",
+            "refusal",
+        }
+        return exc.error_type not in blocked_types
 
     @staticmethod
     def _extract_text(content: Any) -> str:
@@ -196,23 +337,42 @@ class OpenRouterScheduleReader:
         return "\n".join(lines).strip()
 
     @staticmethod
-    def _raise_api_error(status: int, body: str) -> None:
-        if status == 401:
-            raise RuntimeError("مفتاح OpenRouter غير صالح")
-        if status == 402:
-            raise RuntimeError("رصيد OpenRouter غير كافٍ")
-        if status == 429:
-            raise RuntimeError("ضغط مؤقت على OpenRouter؛ أعد المحاولة بعد قليل")
+    def _build_api_error(status: int, data: dict[str, Any]) -> OpenRouterRequestError:
+        error = data.get("error") if isinstance(data, dict) else None
+        error = error if isinstance(error, dict) else {}
+        metadata = error.get("metadata")
+        metadata = metadata if isinstance(metadata, dict) else {}
+        error_type = metadata.get("error_type") or data.get("error_type")
+        provider_code = metadata.get("provider_code")
+        message = error.get("message")
+        message = message.strip()[:300] if isinstance(message, str) else ""
+        effective_status = error.get("code") if isinstance(error.get("code"), int) else status
 
-        message = ""
-        try:
-            error = json.loads(body).get("error", {})
-            if isinstance(error, dict) and isinstance(error.get("message"), str):
-                message = error["message"].strip()[:300]
-        except (json.JSONDecodeError, AttributeError):
-            pass
-        suffix = f": {message}" if message else ""
-        raise RuntimeError(f"فشل OpenRouter برمز {status}{suffix}")
+        if effective_status == 401:
+            text = "مفتاح OpenRouter غير صالح"
+        elif effective_status == 402:
+            text = "رصيد OpenRouter غير كافٍ"
+        elif effective_status == 403:
+            text = "طلب OpenRouter مرفوض بسبب الصلاحيات أو الحماية"
+        elif effective_status == 429:
+            text = "ضغط مؤقت على OpenRouter؛ أعد المحاولة بعد قليل"
+        elif error_type == "invalid_image":
+            text = "الصورة غير صالحة أو غير قابلة للقراءة"
+        elif error_type == "image_too_large":
+            text = "أبعاد الصورة أو حجمها أكبر من حد مزوّد النموذج"
+        elif error_type == "unsupported_image_format":
+            text = "مزود النموذج لا يدعم صيغة الصورة"
+        else:
+            details = [item for item in (message, error_type, provider_code) if item]
+            suffix = f": {' | '.join(map(str, details))}" if details else ""
+            text = f"فشل OpenRouter برمز {effective_status}{suffix}"
+
+        return OpenRouterRequestError(
+            text,
+            status=int(effective_status or status),
+            error_type=str(error_type) if error_type else None,
+            provider_code=str(provider_code) if provider_code else None,
+        )
 
 
 # Compatibility alias: existing handlers keep the old dependency name.
