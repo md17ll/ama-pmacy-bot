@@ -46,9 +46,9 @@ def test_home_handles_no_current_pharmacy() -> None:
     assert "آخر تحديث" not in text
 
 
-def test_home_refresh_button_refreshes_current_status() -> None:
+def test_home_refresh_button_uses_current_status_callback() -> None:
     markup = public_keyboards.user_home()
     buttons = [button for row in markup.inline_keyboard for button in row]
     refresh = next(button for button in buttons if button.callback_data == cb.USER_REFRESH)
 
-    assert refresh.text == "🔄 تحديث المناوبة والوقت"
+    assert refresh.text == "🔄 تحديث الوقت"
