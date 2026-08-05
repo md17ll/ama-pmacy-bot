@@ -44,13 +44,21 @@ jobs:
           python scripts/harden_bot.py
 
       - name: Verify patched source compiles
+        env:
+          PYTHONDONTWRITEBYTECODE: "1"
         run: python -m compileall -q app main.py tests
+
+      - name: Clean generated Python artifacts
+        run: |
+          find app tests -type d -name __pycache__ -prune -exec rm -rf {} +
+          find app tests -type f -name '*.pyc' -delete
+          rm -rf scripts
 
       - name: Commit hardening changes
         run: |
           git config user.name "github-actions[bot]"
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
-          git add app tests Dockerfile .github/workflows/security.yml
+          git add app tests Dockerfile
           if git diff --cached --quiet; then
             echo "No hardening changes to commit"
           else
