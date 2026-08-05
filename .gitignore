@@ -1,4 +1,5 @@
 # Python, test, local database, and secret artifacts
+# Never commit runtime secrets or generated database files.
 __pycache__/
 *.py[cod]
 .pytest_cache/
