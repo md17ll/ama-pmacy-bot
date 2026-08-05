@@ -1,3 +1,4 @@
 compressed_sha256=16cb93143494fcf1bc1e63f2d2bc7f016782ed0e19766f98f011576650de5875
 script_sha256=1f9d573afd80e56d365fbcc7938af1e8cfa0e84afbd90ed4908eeb91c3e2657b
 parts=4
+status=ready
