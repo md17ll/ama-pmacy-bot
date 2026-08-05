@@ -7,7 +7,7 @@ from aiogram.filters import Command
 from aiogram.fsm.context import FSMContext
 from aiogram.types import CallbackQuery, Message
 
-from app import callbacks as cb, keyboards, repositories, texts
+from app import callbacks as cb, keyboards, public_keyboards, repositories, texts
 from app.config import Settings
 from app.db import Database
 from app.handlers.common import require_admin, require_writer
@@ -197,30 +197,26 @@ async def undo_confirm(callback: CallbackQuery, db: Database, settings: Settings
 
 @router.callback_query(F.data == cb.ADMIN_PREVIEW)
 async def admin_preview(callback: CallbackQuery, db: Database, settings: Settings) -> None:
+    """Render the real public home view so preview always follows every UI update."""
     if await require_admin(callback, db) is None:
         return
     now = utcnow()
     async with db.session_factory() as session:
         last_update = await repositories.latest_published_at(session)
-    text = "👁 <b>معاينة واجهة المستخدم</b>\n\n" + texts.user_home_text(
-        now, settings.timezone, last_update
-    )
+        premium_emoji_id = await repositories.get_setting(
+            session,
+            "developer_button_emoji_id",
+            None,
+        )
     await safe_edit(
         callback,
-        text,
-        keyboards.keyboard(
-            [
-                [keyboards.button("🌙 المناوبة الآن", cb.USER_NOW, "primary")],
-                [
-                    keyboards.button("📅 اليوم", cb.USER_TODAY),
-                    keyboards.button("⏭ غداً", cb.USER_TOMORROW),
-                ],
-                [keyboards.button("🔍 البحث", cb.USER_SEARCH, "primary")],
-                [keyboards.button("⬅️ الرجوع للإدارة", cb.ADMIN_HOME)],
-            ]
+        texts.user_home_text(now, settings.timezone, last_update),
+        public_keyboards.user_home(
+            is_admin=True,
+            premium_emoji_id=str(premium_emoji_id) if premium_emoji_id else None,
         ),
     )
-    await answer_callback(callback)
+    await answer_callback(callback, "هذه هي واجهة المستخدم الحالية.")
 
 
 @router.callback_query(F.data == cb.ADMIN_EXPORTS)
