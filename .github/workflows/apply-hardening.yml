@@ -33,24 +33,26 @@ jobs:
           end = text.find(end_marker, start)
           if end < 0:
               raise SystemExit("Expected create_import_batch commit was not found")
-          replacement = '''    import_rows = [
-              ImportRow(
-                  row_number=int(row["row_number"]),
-                  raw_pharmacy_name=str(row["raw_pharmacy_name"]),
-                  matched_pharmacy_id=row.get("matched_pharmacy_id"),
-                  start_at=row.get("start_at"),
-                  end_at=row.get("end_at"),
-                  confidence=row.get("confidence"),
-                  status=row.get("status", "pending"),
-                  errors=list(row.get("errors", [])),
-                  raw_data=dict(row.get("raw_data", {})),
-              )
-              for row in rows
-          ]
-          batch.rows = import_rows
-          batch.summary = summarize_import_rows(import_rows)
-          session.add(batch)
-          '''
+          replacement = "\n".join([
+              "    import_rows = [",
+              "        ImportRow(",
+              "            row_number=int(row[\"row_number\"]),",
+              "            raw_pharmacy_name=str(row[\"raw_pharmacy_name\"]),",
+              "            matched_pharmacy_id=row.get(\"matched_pharmacy_id\"),",
+              "            start_at=row.get(\"start_at\"),",
+              "            end_at=row.get(\"end_at\"),",
+              "            confidence=row.get(\"confidence\"),",
+              "            status=row.get(\"status\", \"pending\"),",
+              "            errors=list(row.get(\"errors\", [])),",
+              "            raw_data=dict(row.get(\"raw_data\", {})),",
+              "        )",
+              "        for row in rows",
+              "    ]",
+              "    batch.rows = import_rows",
+              "    batch.summary = summarize_import_rows(import_rows)",
+              "    session.add(batch)",
+              "",
+          ])
           path.write_text(text[:start] + replacement + text[end:], encoding="utf-8")
           PY
 
