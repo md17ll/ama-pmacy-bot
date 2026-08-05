@@ -35,11 +35,12 @@ jobs:
           script = zlib.decompress(compressed)
           if hashlib.sha256(script).hexdigest() != '1f9d573afd80e56d365fbcc7938af1e8cfa0e84afbd90ed4908eeb91c3e2657b':
               raise SystemExit('Hardening script checksum mismatch')
-          target = Path('/tmp/harden_bot.py')
+          target = Path('scripts/harden_bot.py')
+          target.parent.mkdir(parents=True, exist_ok=True)
           target.write_bytes(script)
           compile(script, str(target), 'exec')
           PY
-          python /tmp/harden_bot.py
+          python scripts/harden_bot.py
 
       - name: Verify patched source compiles
         run: python -m compileall -q app main.py tests
