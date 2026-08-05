@@ -2,7 +2,7 @@ from __future__ import annotations
 
 from datetime import date, datetime, time
 from io import BytesIO
-from typing import Any
+from typing import Any, Iterable
 
 from openpyxl import Workbook, load_workbook
 from openpyxl.styles import Alignment, Font, PatternFill
@@ -157,6 +157,25 @@ def build_pharmacies_template() -> bytes:
     sheet.append(["صيدلية الشفاء", "شارع البلدية", "الشفاء، الشفا", "active", ""])
     _style_sheet(sheet, widths=[28, 45, 35, 16, 30])
     sheet.freeze_panes = "A2"
+    buffer = BytesIO()
+    workbook.save(buffer)
+    return buffer.getvalue()
+
+
+def build_missing_pharmacies_template(names: Iterable[str], batch_id: int) -> bytes:
+    """Create a pre-filled workbook for all unmatched pharmacy names in a draft."""
+    unique_names = sorted({name.strip() for name in names if name and name.strip()})
+    workbook = Workbook()
+    sheet = workbook.active
+    sheet.title = "الصيدليات الناقصة"
+    sheet.append(["اسم الصيدلية", "العنوان", "الأسماء البديلة", "الحالة", "ملاحظات"])
+    for name in unique_names:
+        sheet.append([name, "", "", "active", f"أضيفت من مسودة المناوبات #{batch_id}"])
+    _style_sheet(sheet, widths=[32, 50, 35, 16, 36])
+    sheet.freeze_panes = "A2"
+    address_fill = PatternFill("solid", fgColor="FFF2CC")
+    for row in range(2, sheet.max_row + 1):
+        sheet.cell(row=row, column=2).fill = address_fill
     buffer = BytesIO()
     workbook.save(buffer)
     return buffer.getvalue()
