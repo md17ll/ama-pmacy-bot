@@ -39,7 +39,7 @@ def user_home(
             button("⏭ صيدليات غداً", cb.USER_TOMORROW, ButtonStyle.SUCCESS),
         ],
         [button("🔍 البحث عن صيدلية", cb.USER_SEARCH, ButtonStyle.PRIMARY)],
-        [button("🔄 تحديث المناوبة والوقت", cb.USER_REFRESH, ButtonStyle.DANGER)],
+        [button("🔄 تحديث الوقت", cb.USER_REFRESH, ButtonStyle.DANGER)],
     ]
     if is_admin:
         rows.append([button("⚙️ لوحة الإدارة", cb.ADMIN_HOME, ButtonStyle.PRIMARY)])
