@@ -1,0 +1,132 @@
+name: Apply pharmacy editor keyboard
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - ".github/workflows/apply-pharmacy-editor.yml"
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  patch:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Add full pharmacy editing controls
+        run: |
+          python - <<'PY'
+          from pathlib import Path
+
+          path = Path("app/keyboards.py")
+          text = path.read_text(encoding="utf-8")
+
+          start = text.index("def pharmacy_list(")
+          end = text.index("\ndef confirm_pharmacy_delete", start)
+          replacement = '''def pharmacy_list(pharmacies: list[Pharmacy]) -> InlineKeyboardMarkup:
+              rows: list[list[InlineKeyboardButton]] = []
+              for pharmacy in pharmacies[:100]:
+                  icon = "⚠️" if not pharmacy.address.strip() else "💊"
+                  rows.append([button(f"{icon} {pharmacy.name}", f"a:p:view:{pharmacy.id}")])
+              rows.append([button("➕ إضافة صيدلية", cb.ADMIN_PHARMACY_ADD, ButtonStyle.SUCCESS)])
+              rows.append([button("⬅️ رجوع", cb.ADMIN_PHARMACIES)])
+              return keyboard(rows)
+
+
+          def pharmacy_detail(pharmacy_id: int, status: str) -> InlineKeyboardMarkup:
+              return keyboard(
+                  [
+                      [
+                          button("✏️ تعديل الاسم", f"a:p:edit:{pharmacy_id}:name"),
+                          button("📍 تعديل العنوان", f"a:p:edit:{pharmacy_id}:address"),
+                      ],
+                      [
+                          button("🔤 تعديل الأسماء البديلة", f"a:p:edit:{pharmacy_id}:aliases"),
+                          button("📝 تعديل الملاحظات", f"a:p:edit:{pharmacy_id}:notes"),
+                      ],
+                      [button("📌 تعديل الحالة", f"a:p:status_menu:{pharmacy_id}", ButtonStyle.PRIMARY)],
+                      [button("🗑 حذف الصيدلية", f"a:p:delete_ask:{pharmacy_id}", ButtonStyle.DANGER)],
+                      [button("⬅️ رجوع", cb.ADMIN_PHARMACIES)],
+                  ]
+              )
+
+
+          def pharmacy_status(pharmacy_id: int, current: str) -> InlineKeyboardMarkup:
+              def label(status: str, text: str) -> str:
+                  return f"✅ {text}" if current == status else text
+
+              return keyboard(
+                  [
+                      [button(label("active", "🟢 فعالة"), f"a:p:status:{pharmacy_id}:active", ButtonStyle.SUCCESS)],
+                      [button(label("temporarily_closed", "⏸ مغلقة مؤقتاً"), f"a:p:status:{pharmacy_id}:temporarily_closed")],
+                      [button(label("inactive", "🚫 متوقفة"), f"a:p:status:{pharmacy_id}:inactive", ButtonStyle.DANGER)],
+                      [button("⬅️ رجوع", f"a:p:view:{pharmacy_id}")],
+                  ]
+              )
+
+          '''
+          text = text[:start] + replacement + text[end + 1:]
+
+          marker = '''            [
+                  button(
+                      "➕ تجهيز الصيدليات الناقصة",
+                      f"a:d:missing:{batch_id}",
+                      ButtonStyle.PRIMARY,
+                  )
+              ],'''
+          if marker not in text:
+              raise SystemExit("Draft pharmacy marker not found")
+          text = text.replace(
+              marker,
+              '''            [
+                  button(
+                      "🏥 حفظ أسماء الصيدليات تلقائياً",
+                      f"a:d:auto_pharmacies:{batch_id}",
+                      ButtonStyle.SUCCESS,
+                  )
+              ],
+              [
+                  button(
+                      "📊 إضافة الصيدليات والعناوين عبر Excel",
+                      f"a:d:missing:{batch_id}",
+                      ButtonStyle.PRIMARY,
+                  )
+              ],''',
+              1,
+          )
+          path.write_text(text, encoding="utf-8")
+
+          text_path = Path("app/texts.py")
+          text = text_path.read_text(encoding="utf-8")
+          text = text.replace(
+              'f"📍 {html(shift.pharmacy.address)}",',
+              'f"📍 {html(shift.pharmacy.address or \'العنوان غير مضاف بعد\')}",',
+          )
+          text = text.replace(
+              'f"📍 {html(pharmacy.address)}",',
+              'f"📍 {html(pharmacy.address or \'العنوان غير مضاف بعد\')}",',
+          )
+          text = text.replace(
+              'f"📍 العنوان: {html(pharmacy.address)}\\n"',
+              'f"📍 العنوان: {html(pharmacy.address or \'غير مضاف بعد\')}\\n"',
+          )
+          text_path.write_text(text, encoding="utf-8")
+          PY
+
+      - name: Verify source compiles
+        env:
+          PYTHONDONTWRITEBYTECODE: "1"
+        run: python -m compileall -q app main.py tests
+
+      - name: Commit pharmacy editor
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add app/keyboards.py app/texts.py
+          git commit -m "Add full pharmacy editor and automatic draft names button"
+          git push origin main
