@@ -9,7 +9,10 @@ from app.db import Database
 from app.handlers.common import require_admin
 from app.services.backup import build_json_backup
 from app.services.excel import export_pharmacies, export_shifts
+from app.services.shift_schedule_tools import get_shift_times
+from app.services.word_export import WordExportError, build_official_word_schedule
 from app.telegram_utils import answer_callback
+from app.utils import as_local
 
 
 router = Router(name="exports")
@@ -47,6 +50,38 @@ async def export_shifts_handler(
             caption=f"📅 تم تصدير {len(shifts)} مناوبة.",
         )
     await answer_callback(callback, "تم إرسال الملف.")
+
+
+@router.callback_query(F.data == cb.ADMIN_EXPORT_WORD)
+async def export_word_handler(
+    callback: CallbackQuery,
+    db: Database,
+    settings: Settings,
+) -> None:
+    if await require_admin(callback, db) is None:
+        return
+    async with db.session_factory() as session:
+        shifts = await repositories.list_all_shifts(session)
+        times = await get_shift_times(session)
+    try:
+        data = build_official_word_schedule(shifts, settings.timezone, times)
+    except WordExportError as exc:
+        await answer_callback(callback, str(exc), alert=True)
+        return
+
+    local_dates = sorted({as_local(shift.start_at, settings.timezone).date() for shift in shifts})
+    first = local_dates[0].isoformat()
+    last = local_dates[-1].isoformat()
+    filename = f"amuda_pharmacy_schedule_{first}_{last}.docx"
+    if callback.message:
+        await callback.message.answer_document(
+            BufferedInputFile(data, filename=filename),
+            caption=(
+                "📄 جدول المناوبات بصيغة Word، بنفس نظام الملف الرسمي: "
+                "التاريخ، الصيدلية النهارية، والصيدلية المسائية بمجموعتين جنب بعض."
+            ),
+        )
+    await answer_callback(callback, "تم إرسال ملف Word.")
 
 
 @router.callback_query(F.data == cb.ADMIN_EXPORT_JSON)
