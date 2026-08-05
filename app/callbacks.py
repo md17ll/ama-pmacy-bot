@@ -30,6 +30,8 @@ ADMIN_SHIFT_TOMORROW = "a:s:tomorrow"
 ADMIN_SHIFT_UPCOMING = "a:s:upcoming"
 ADMIN_SHIFT_SEARCH = "a:s:search"
 ADMIN_SHIFT_ADD = "a:s:add"
+ADMIN_SHIFT_SWAP = "a:s:swap"
+ADMIN_SHIFT_GLOBAL_TIMES = "a:s:times"
 ADMIN_SHIFT_DELETE_PERIOD = "a:s:delperiod"
 ADMIN_SHIFT_CHECK = "a:s:check"
 
@@ -42,6 +44,7 @@ ADMIN_TEMPLATE_PHARMACIES = "a:tpl:pharmacies"
 
 ADMIN_EXPORT_PHARMACIES = "a:e:pharmacies"
 ADMIN_EXPORT_SHIFTS = "a:e:shifts"
+ADMIN_EXPORT_WORD = "a:e:word"
 ADMIN_EXPORT_JSON = "a:e:json"
 
 ADMIN_ADMIN_ADD = "a:m:add"
