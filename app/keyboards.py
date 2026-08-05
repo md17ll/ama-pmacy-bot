@@ -12,6 +12,8 @@ from app.models import Admin, ImportBatch, Pharmacy, Shift
 def button(text: str, callback_data: str, style: ButtonStyle | str | None = None) -> InlineKeyboardButton:
     if len(callback_data.encode("utf-8")) > 64:
         raise ValueError(f"callback_data is longer than 64 bytes: {callback_data}")
+    if style is None and (text.startswith("⬅️") or "الرجوع" in text):
+        style = ButtonStyle.PRIMARY
     return InlineKeyboardButton(text=text, callback_data=callback_data, style=style)
 
 
@@ -211,6 +213,13 @@ def draft_detail(batch_id: int) -> InlineKeyboardMarkup:
             [
                 button("⚠️ مراجعة الأخطاء", f"a:d:errors:{batch_id}"),
                 button("👁 معاينة كاملة", f"a:d:preview:{batch_id}"),
+            ],
+            [
+                button(
+                    "➕ تجهيز الصيدليات الناقصة",
+                    f"a:d:missing:{batch_id}",
+                    ButtonStyle.PRIMARY,
+                )
             ],
             [button("✅ إضافة ونشر", f"a:d:publish_ask:{batch_id}:add", ButtonStyle.SUCCESS)],
             [button("🔄 استبدال الفترة ونشر", f"a:d:publish_ask:{batch_id}:replace", ButtonStyle.DANGER)],
