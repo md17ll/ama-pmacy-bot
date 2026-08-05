@@ -33,30 +33,20 @@ jobs:
 
           replace_once(
               "app/keyboards.py",
-              '''            [
-                  button("📷 قراءة صورة بـ GPT-5.4 Mini", cb.ADMIN_IMPORT_GEMINI, ButtonStyle.PRIMARY),
-                  button("📊 رفع ملف Excel", cb.ADMIN_IMPORT_EXCEL, ButtonStyle.PRIMARY),
-              ],''',
-              '''            [
-                  button("📄 رفع جدول Word", cb.ADMIN_IMPORT_WORD, ButtonStyle.SUCCESS),
-              ],
-              [
-                  button("📷 قراءة صورة بـ GPT-5.4 Mini", cb.ADMIN_IMPORT_GEMINI, ButtonStyle.PRIMARY),
-                  button("📊 رفع ملف Excel", cb.ADMIN_IMPORT_EXCEL, ButtonStyle.PRIMARY),
-              ],''',
+              '            [button("📝 المسودات", cb.ADMIN_DRAFTS)],',
+              '            [button("📄 رفع جدول Word", cb.ADMIN_IMPORT_WORD, ButtonStyle.SUCCESS)],\n'
+              '            [button("📝 المسودات", cb.ADMIN_DRAFTS)],',
           )
           replace_once(
               "app/keyboards.py",
-              '''            [button("📷 قراءة صورة بواسطة GPT-5.4 Mini", cb.ADMIN_IMPORT_GEMINI, ButtonStyle.PRIMARY)],
-              [button("📊 رفع ملف Excel", cb.ADMIN_IMPORT_EXCEL, ButtonStyle.PRIMARY)],''',
-              '''            [button("📄 رفع جدول Word الرسمي", cb.ADMIN_IMPORT_WORD, ButtonStyle.SUCCESS)],
-              [button("📷 قراءة صورة بواسطة GPT-5.4 Mini", cb.ADMIN_IMPORT_GEMINI, ButtonStyle.PRIMARY)],
-              [button("📊 رفع ملف Excel", cb.ADMIN_IMPORT_EXCEL, ButtonStyle.PRIMARY)],''',
+              '            [button("📷 قراءة صورة بواسطة GPT-5.4 Mini", cb.ADMIN_IMPORT_GEMINI, ButtonStyle.PRIMARY)],',
+              '            [button("📄 رفع جدول Word الرسمي", cb.ADMIN_IMPORT_WORD, ButtonStyle.SUCCESS)],\n'
+              '            [button("📷 قراءة صورة بواسطة GPT-5.4 Mini", cb.ADMIN_IMPORT_GEMINI, ButtonStyle.PRIMARY)],',
           )
 
           replace_once(
               "app/texts.py",
-              '''    source = "GPT-5.4 Mini عبر OpenRouter" if batch.source_type == "gemini" else "Excel" if batch.source_type == "excel" else "يدوي"''',
+              '    source = "GPT-5.4 Mini عبر OpenRouter" if batch.source_type == "gemini" else "Excel" if batch.source_type == "excel" else "يدوي"',
               '''    source = (
               "GPT-5.4 Mini عبر OpenRouter"
               if batch.source_type == "gemini"
@@ -68,17 +58,15 @@ jobs:
           )''',
           )
 
-          old_prompt = '''أنت تقرأ صورة جدول مناوبات صيدليات في مدينة عامودا في سوريا.
-          استخرج كل صف مناوبة ظاهر في الصورة بدقة، ولا تهمل أي صيدلية.
-          استخرج فقط: اسم الصيدلية، تاريخ المناوبة، وقت البداية، وقت النهاية، ودرجة الثقة.
-          لا تستخرج أرقام الهواتف أو روابط الخرائط أو العناوين.
-          حافظ على اسم الصيدلية كما يظهر، مع تصحيح أخطاء OCR الواضحة فقط.
-          حوّل التاريخ إلى YYYY-MM-DD عند الإمكان.
-          حوّل الوقت إلى نظام 12 ساعة واكتب AM أو PM بوضوح.
-          إذا كانت نهاية المناوبة صباح اليوم التالي، اكتب وقت النهاية الصحيح ولا تغيّر تاريخ البداية؛ النظام سيضيف اليوم التالي.
-          لا تخمن قيمة غير واضحة. ضع ملاحظة وتحذيراً ودرجة ثقة منخفضة بدلاً من التخمين.
-          أعد كائناً بصيغة JSON فقط، يحتوي على المفاتيح rows وdocument_language وwarnings.
-          كل عنصر داخل rows يجب أن يحتوي على pharmacy_name وduty_date وstart_time وend_time وconfidence وnote.'''
+          path = Path("app/services/gemini.py")
+          text = path.read_text(encoding="utf-8")
+          start_marker = "أنت تقرأ صورة جدول مناوبات صيدليات في مدينة عامودا في سوريا."
+          end_marker = "كل عنصر داخل rows يجب أن يحتوي على pharmacy_name وduty_date وstart_time وend_time وconfidence وnote."
+          start = text.find(start_marker)
+          end = text.find(end_marker, start)
+          if start < 0 or end < 0:
+              raise SystemExit("Could not locate the existing GPT schedule prompt")
+          end += len(end_marker)
           new_prompt = '''أنت تقرأ صورة جدول المناوبات الرسمي لصيدليات مدينة عامودا في سوريا.
           تنسيق الجدول المعتاد هو مجموعتان جنب بعض، وكل مجموعة من ثلاثة أعمدة:
           اليوم والتاريخ | الصيدلية النهارية | الصيدلية المسائية.
@@ -94,7 +82,7 @@ jobs:
           لا تخمن قيمة غير واضحة؛ أضف تحذيراً ودرجة ثقة منخفضة.
           أعد كائناً بصيغة JSON فقط، يحتوي على المفاتيح rows وdocument_language وwarnings.
           كل عنصر داخل rows يجب أن يحتوي على pharmacy_name وduty_date وstart_time وend_time وconfidence وnote.'''
-          replace_once("app/services/gemini.py", old_prompt, new_prompt)
+          path.write_text(text[:start] + new_prompt + text[end:], encoding="utf-8")
           PY
 
       - name: Verify source compiles
