@@ -22,20 +22,20 @@ async def _render_home(target: CallbackQuery | Message, db: Database, settings: 
     now = utcnow()
     async with db.session_factory() as session:
         admin = await repositories.is_admin(session, target.from_user.id)
-        last_update = await repositories.latest_published_at(session)
+        current_shifts = await repositories.current_shifts(session, now)
         premium_emoji_id = await repositories.get_setting(
             session,
             "developer_button_emoji_id",
             None,
         )
-    text = texts.user_home_text(now, settings.timezone, last_update)
+    text = texts.user_home_text(now, settings.timezone, current_shifts)
     markup = public_keyboards.user_home(
         admin,
         str(premium_emoji_id) if premium_emoji_id else None,
     )
     if isinstance(target, CallbackQuery):
         await safe_edit(target, text, markup)
-        await answer_callback(target)
+        await answer_callback(target, "تم تحديث المناوبة والوقت.")
     else:
         await target.answer(text, reply_markup=markup)
 
