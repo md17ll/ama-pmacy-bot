@@ -8,6 +8,7 @@ class UserSearchState(StatesGroup):
 class AdminImportState(StatesGroup):
     waiting_image = State()
     waiting_excel = State()
+    waiting_word = State()
     waiting_pharmacies_excel = State()
     waiting_missing_pharmacies_excel = State()
 
