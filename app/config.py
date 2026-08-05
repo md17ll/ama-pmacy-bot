@@ -68,9 +68,11 @@ class Settings:
 
 @lru_cache(maxsize=1)
 def get_settings() -> Settings:
+    # The legacy field names are kept so existing handlers and tests remain compatible.
+    # Their values now come from OpenRouter variables.
     return Settings(
         bot_token=os.getenv("BOT_TOKEN", "").strip(),
-        gemini_api_key=os.getenv("GEMINI_API_KEY", "").strip() or None,
+        gemini_api_key=os.getenv("OPENROUTER_API_KEY", "").strip() or None,
         database_url=_normalize_database_url(
             os.getenv("DATABASE_URL", "sqlite+aiosqlite:///./amuda_bot.db").strip()
         ),
@@ -81,6 +83,9 @@ def get_settings() -> Settings:
         webhook_path=os.getenv("WEBHOOK_PATH", "/telegram/webhook").strip() or "/telegram/webhook",
         webhook_secret=os.getenv("WEBHOOK_SECRET", "").strip() or None,
         port=int(os.getenv("PORT", "8080")),
-        gemini_model=os.getenv("GEMINI_MODEL", "gemini-2.5-flash").strip(),
+        gemini_model=(
+            os.getenv("OPENROUTER_MODEL", "openai/gpt-5.4-mini").strip()
+            or "openai/gpt-5.4-mini"
+        ),
         log_level=os.getenv("LOG_LEVEL", "INFO").strip().upper(),
     )
