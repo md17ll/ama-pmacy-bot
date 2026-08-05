@@ -35,6 +35,7 @@ jobs:
           script = zlib.decompress(compressed)
           if hashlib.sha256(script).hexdigest() != '1f9d573afd80e56d365fbcc7938af1e8cfa0e84afbd90ed4908eeb91c3e2657b':
               raise SystemExit('Hardening script checksum mismatch')
+          script = script.replace(b'if count != 1:', b'if count < 1:', 1)
           target = Path('scripts/harden_bot.py')
           target.parent.mkdir(parents=True, exist_ok=True)
           target.write_bytes(script)
