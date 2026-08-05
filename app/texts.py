@@ -139,7 +139,7 @@ def admin_home_text(stats: dict, now: datetime, timezone) -> str:
 
 def batch_summary_text(batch: ImportBatch) -> str:
     summary = batch.summary or {}
-    source = "Gemini" if batch.source_type == "gemini" else "Excel" if batch.source_type == "excel" else "يدوي"
+    source = "GPT-5.4 Mini عبر OpenRouter" if batch.source_type == "gemini" else "Excel" if batch.source_type == "excel" else "يدوي"
     lines = [
         f"📝 <b>مسودة رقم {batch.id}</b>",
         "",

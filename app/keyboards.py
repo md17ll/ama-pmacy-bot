@@ -64,7 +64,7 @@ def admin_home() -> InlineKeyboardMarkup:
         [
             [button("✨ إدخال جدول جديد", cb.ADMIN_IMPORT, ButtonStyle.PRIMARY)],
             [
-                button("📷 قراءة صورة بجيمناي", cb.ADMIN_IMPORT_GEMINI, ButtonStyle.PRIMARY),
+                button("📷 قراءة صورة بـ GPT-5.4 Mini", cb.ADMIN_IMPORT_GEMINI, ButtonStyle.PRIMARY),
                 button("📊 رفع ملف Excel", cb.ADMIN_IMPORT_EXCEL, ButtonStyle.PRIMARY),
             ],
             [button("📝 المسودات", cb.ADMIN_DRAFTS)],
@@ -91,7 +91,7 @@ def admin_home() -> InlineKeyboardMarkup:
 def admin_import() -> InlineKeyboardMarkup:
     return keyboard(
         [
-            [button("📷 قراءة صورة بواسطة Gemini", cb.ADMIN_IMPORT_GEMINI, ButtonStyle.PRIMARY)],
+            [button("📷 قراءة صورة بواسطة GPT-5.4 Mini", cb.ADMIN_IMPORT_GEMINI, ButtonStyle.PRIMARY)],
             [button("📊 رفع ملف Excel", cb.ADMIN_IMPORT_EXCEL, ButtonStyle.PRIMARY)],
             [button("✍️ إضافة مناوبة يدوياً", cb.ADMIN_IMPORT_MANUAL, ButtonStyle.SUCCESS)],
             [button("📥 تنزيل نموذج Excel", cb.ADMIN_TEMPLATE_SHIFTS)],

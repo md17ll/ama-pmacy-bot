@@ -42,8 +42,8 @@ async def gemini_prompt(callback: CallbackQuery, db: Database, state: FSMContext
     await safe_edit(
         callback,
         texts.admin_section_text(
-            "قراءة صورة بواسطة Gemini",
-            "أرسل الآن صورة واضحة وكاملة لجدول المناوبات. سيستخرج Gemini اسم الصيدلية والتاريخ ووقت البداية والنهاية فقط، ثم يحفظ النتيجة كمسودة للمراجعة.",
+            "قراءة صورة بواسطة GPT-5.4 Mini",
+            "أرسل الآن صورة واضحة وكاملة لجدول المناوبات. سيستخرج GPT-5.4 Mini اسم الصيدلية والتاريخ ووقت البداية والنهاية فقط، ثم يحفظ النتيجة كمسودة للمراجعة.",
             warning="لن تُنشر أي بيانات قبل موافقتك.",
         ),
         keyboards.simple_back(cb.ADMIN_IMPORT),
@@ -66,7 +66,7 @@ async def gemini_receive_photo(
     if photo.file_size and photo.file_size > MAX_IMAGE_BYTES:
         await message.answer("حجم الصورة أكبر من الحد المسموح.")
         return
-    status = await message.answer("⏳ جاري تنزيل الصورة وتحليلها بواسطة Gemini…")
+    status = await message.answer("⏳ جاري تنزيل الصورة وتحليلها بواسطة GPT-5.4 Mini…")
     try:
         data = await _download_file(bot, photo.file_id)
         parsed_rows, warnings = await gemini_reader.read_image(data, "image/jpeg")
@@ -90,7 +90,7 @@ async def gemini_receive_photo(
         return
     warning_text = ""
     if warnings:
-        warning_text = "\n\n⚠️ تحذيرات Gemini:\n" + "\n".join(f"• {item}" for item in warnings[:5])
+        warning_text = "\n\n⚠️ تحذيرات GPT:\n" + "\n".join(f"• {item}" for item in warnings[:5])
     await status.edit_text(
         texts.batch_summary_text(batch) + warning_text,
         reply_markup=keyboards.draft_detail(batch.id),
