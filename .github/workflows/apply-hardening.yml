@@ -1,4 +1,4 @@
-name: Apply async repository fix
+name: Apply async import-batch fix
 
 on:
   push:
@@ -18,19 +18,40 @@ jobs:
         with:
           fetch-depth: 0
 
-      - name: Fix async alias loading before audit serialization
+      - name: Build import rows before flushing the batch
         run: |
           python - <<'PY'
           from pathlib import Path
 
           path = Path("app/repositories.py")
           text = path.read_text(encoding="utf-8")
-          old = "    session.add(\n        AuditLog(\n            admin_id=admin_id,\n            action=\"pharmacy_create\","
-          new = "    await session.refresh(pharmacy, attribute_names=[\"aliases\"])\n    session.add(\n        AuditLog(\n            admin_id=admin_id,\n            action=\"pharmacy_create\","
-          count = text.count(old)
-          if count != 1:
-              raise SystemExit(f"Expected one create_pharmacy audit block, found {count}")
-          path.write_text(text.replace(old, new, 1), encoding="utf-8")
+          start_marker = "    session.add(batch)\n    await session.flush()\n    for row in rows:\n"
+          end_marker = "    await session.commit()\n"
+          start = text.find(start_marker, text.find("async def create_import_batch("))
+          if start < 0:
+              raise SystemExit("Expected create_import_batch row block was not found")
+          end = text.find(end_marker, start)
+          if end < 0:
+              raise SystemExit("Expected create_import_batch commit was not found")
+          replacement = '''    import_rows = [
+              ImportRow(
+                  row_number=int(row["row_number"]),
+                  raw_pharmacy_name=str(row["raw_pharmacy_name"]),
+                  matched_pharmacy_id=row.get("matched_pharmacy_id"),
+                  start_at=row.get("start_at"),
+                  end_at=row.get("end_at"),
+                  confidence=row.get("confidence"),
+                  status=row.get("status", "pending"),
+                  errors=list(row.get("errors", [])),
+                  raw_data=dict(row.get("raw_data", {})),
+              )
+              for row in rows
+          ]
+          batch.rows = import_rows
+          batch.summary = summarize_import_rows(import_rows)
+          session.add(batch)
+          '''
+          path.write_text(text[:start] + replacement + text[end:], encoding="utf-8")
           PY
 
       - name: Verify source compiles
@@ -43,5 +64,5 @@ jobs:
           git config user.name "github-actions[bot]"
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
           git add app/repositories.py
-          git commit -m "Fix async pharmacy audit serialization"
+          git commit -m "Fix async import batch row creation"
           git push origin main
