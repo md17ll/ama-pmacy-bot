@@ -12,6 +12,7 @@ from app.db import Database
 from app.handlers.common import require_writer
 from app.services.importer import prepare_import_rows
 from app.services.pharmacy_autocreate import create_missing_pharmacy_names
+from app.services.shift_schedule_tools import get_shift_times
 from app.services.word_schedule import MAX_DOCX_BYTES, parse_amuda_word_schedule
 from app.states import AdminImportState
 from app.telegram_utils import answer_callback, safe_edit, try_delete
@@ -47,7 +48,10 @@ async def word_prompt(callback: CallbackQuery, db: Database, state: FSMContext) 
                 "🏥 أسماء الصيدليات الجديدة تُحفظ تلقائياً.",
                 "↔️ يدعم وجود مجموعتين من التواريخ جنب بعض في الصفحة.",
             ],
-            warning="العناوين غير الموجودة تبقى فارغة وتظهر في قسم بيانات ناقصة لتعديلها لاحقاً.",
+            warning=(
+                "عند غياب الأوقات من رأس الملف تُستخدم الأوقات العامة المحفوظة. "
+                "العناوين غير الموجودة تبقى فارغة وتظهر في قسم بيانات ناقصة."
+            ),
         ),
         keyboards.simple_back(cb.ADMIN_IMPORT),
     )
@@ -77,8 +81,15 @@ async def word_receive_document(
     auto_created = 0
     try:
         data = await _download_file(bot, document.file_id)
-        parsed_rows, warnings = parse_amuda_word_schedule(data)
         async with db.session_factory() as session:
+            general_times = await get_shift_times(session)
+            parsed_rows, warnings = parse_amuda_word_schedule(
+                data,
+                default_day_start=general_times.day_start,
+                default_day_end=general_times.day_end,
+                default_evening_start=general_times.evening_start,
+                default_evening_end=general_times.evening_end,
+            )
             prepared = await prepare_import_rows(session, parsed_rows, settings.timezone)
             missing_names = [
                 row["raw_pharmacy_name"]
