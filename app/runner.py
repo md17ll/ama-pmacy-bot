@@ -17,7 +17,7 @@ from aiogram.webhook.aiohttp_server import SimpleRequestHandler, setup_applicati
 
 from app.config import get_settings
 from app.db import Database
-from app.handlers import admin, admins, exports, imports, missing_pharmacies, pharmacies, shifts, user
+from app.handlers import admin, admins, exports, imports, missing_pharmacies, pharmacies, premium, shifts, user
 from app.middlewares import AntiSpamMiddleware
 from app.repositories import sync_owner_admins
 from app.services.gemini import GeminiScheduleReader
@@ -67,6 +67,7 @@ def build_dispatcher() -> Dispatcher:
     dispatcher.message.outer_middleware(anti_spam)
     dispatcher.callback_query.outer_middleware(anti_spam)
 
+    dispatcher.include_router(premium.router)
     dispatcher.include_router(missing_pharmacies.router)
     dispatcher.include_router(imports.router)
     dispatcher.include_router(pharmacies.router)
