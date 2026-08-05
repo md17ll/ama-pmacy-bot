@@ -695,23 +695,23 @@ async def create_import_batch(
         period_end=max(dates) if dates else None,
         summary={},
     )
-    session.add(batch)
-    await session.flush()
-    for row in rows:
-        batch.rows.append(
-            ImportRow(
-                row_number=int(row["row_number"]),
-                raw_pharmacy_name=str(row["raw_pharmacy_name"]),
-                matched_pharmacy_id=row.get("matched_pharmacy_id"),
-                start_at=row.get("start_at"),
-                end_at=row.get("end_at"),
-                confidence=row.get("confidence"),
-                status=row.get("status", "pending"),
-                errors=list(row.get("errors", [])),
-                raw_data=dict(row.get("raw_data", {})),
-            )
+    import_rows = [
+        ImportRow(
+            row_number=int(row["row_number"]),
+            raw_pharmacy_name=str(row["raw_pharmacy_name"]),
+            matched_pharmacy_id=row.get("matched_pharmacy_id"),
+            start_at=row.get("start_at"),
+            end_at=row.get("end_at"),
+            confidence=row.get("confidence"),
+            status=row.get("status", "pending"),
+            errors=list(row.get("errors", [])),
+            raw_data=dict(row.get("raw_data", {})),
         )
-    batch.summary = summarize_import_rows(batch.rows)
+        for row in rows
+    ]
+    batch.rows = import_rows
+    batch.summary = summarize_import_rows(import_rows)
+    session.add(batch)
     await session.commit()
     await session.refresh(batch, attribute_names=["rows"])
     return batch
