@@ -25,19 +25,11 @@ jobs:
 
           path = Path("app/repositories.py")
           text = path.read_text(encoding="utf-8")
-          old = '''    session.add(
-              AuditLog(
-                  admin_id=admin_id,
-                  action="pharmacy_create",
-          '''
-          new = '''    await session.refresh(pharmacy, attribute_names=["aliases"])
-              session.add(
-              AuditLog(
-                  admin_id=admin_id,
-                  action="pharmacy_create",
-          '''
-          if old not in text:
-              raise SystemExit("Expected create_pharmacy audit block was not found")
+          old = "    session.add(\n        AuditLog(\n            admin_id=admin_id,\n            action=\"pharmacy_create\","
+          new = "    await session.refresh(pharmacy, attribute_names=[\"aliases\"])\n    session.add(\n        AuditLog(\n            admin_id=admin_id,\n            action=\"pharmacy_create\","
+          count = text.count(old)
+          if count != 1:
+              raise SystemExit(f"Expected one create_pharmacy audit block, found {count}")
           path.write_text(text.replace(old, new, 1), encoding="utf-8")
           PY
 
