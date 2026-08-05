@@ -1,0 +1,111 @@
+name: Apply official Amuda Word format
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - ".github/workflows/apply-amuda-word-format.yml"
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  patch:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Add Word buttons, labels, and exact image instructions
+        run: |
+          python - <<'PY'
+          from pathlib import Path
+
+          def replace_once(path_name: str, old: str, new: str) -> None:
+              path = Path(path_name)
+              text = path.read_text(encoding="utf-8")
+              count = text.count(old)
+              if count != 1:
+                  raise SystemExit(f"Expected one match in {path_name}, found {count}: {old}")
+              path.write_text(text.replace(old, new, 1), encoding="utf-8")
+
+          replace_once(
+              "app/keyboards.py",
+              '''            [
+                  button("📷 قراءة صورة بـ GPT-5.4 Mini", cb.ADMIN_IMPORT_GEMINI, ButtonStyle.PRIMARY),
+                  button("📊 رفع ملف Excel", cb.ADMIN_IMPORT_EXCEL, ButtonStyle.PRIMARY),
+              ],''',
+              '''            [
+                  button("📄 رفع جدول Word", cb.ADMIN_IMPORT_WORD, ButtonStyle.SUCCESS),
+              ],
+              [
+                  button("📷 قراءة صورة بـ GPT-5.4 Mini", cb.ADMIN_IMPORT_GEMINI, ButtonStyle.PRIMARY),
+                  button("📊 رفع ملف Excel", cb.ADMIN_IMPORT_EXCEL, ButtonStyle.PRIMARY),
+              ],''',
+          )
+          replace_once(
+              "app/keyboards.py",
+              '''            [button("📷 قراءة صورة بواسطة GPT-5.4 Mini", cb.ADMIN_IMPORT_GEMINI, ButtonStyle.PRIMARY)],
+              [button("📊 رفع ملف Excel", cb.ADMIN_IMPORT_EXCEL, ButtonStyle.PRIMARY)],''',
+              '''            [button("📄 رفع جدول Word الرسمي", cb.ADMIN_IMPORT_WORD, ButtonStyle.SUCCESS)],
+              [button("📷 قراءة صورة بواسطة GPT-5.4 Mini", cb.ADMIN_IMPORT_GEMINI, ButtonStyle.PRIMARY)],
+              [button("📊 رفع ملف Excel", cb.ADMIN_IMPORT_EXCEL, ButtonStyle.PRIMARY)],''',
+          )
+
+          replace_once(
+              "app/texts.py",
+              '''    source = "GPT-5.4 Mini عبر OpenRouter" if batch.source_type == "gemini" else "Excel" if batch.source_type == "excel" else "يدوي"''',
+              '''    source = (
+              "GPT-5.4 Mini عبر OpenRouter"
+              if batch.source_type == "gemini"
+              else "Word الرسمي"
+              if batch.source_type == "word"
+              else "Excel"
+              if batch.source_type == "excel"
+              else "يدوي"
+          )''',
+          )
+
+          old_prompt = '''أنت تقرأ صورة جدول مناوبات صيدليات في مدينة عامودا في سوريا.
+          استخرج كل صف مناوبة ظاهر في الصورة بدقة، ولا تهمل أي صيدلية.
+          استخرج فقط: اسم الصيدلية، تاريخ المناوبة، وقت البداية، وقت النهاية، ودرجة الثقة.
+          لا تستخرج أرقام الهواتف أو روابط الخرائط أو العناوين.
+          حافظ على اسم الصيدلية كما يظهر، مع تصحيح أخطاء OCR الواضحة فقط.
+          حوّل التاريخ إلى YYYY-MM-DD عند الإمكان.
+          حوّل الوقت إلى نظام 12 ساعة واكتب AM أو PM بوضوح.
+          إذا كانت نهاية المناوبة صباح اليوم التالي، اكتب وقت النهاية الصحيح ولا تغيّر تاريخ البداية؛ النظام سيضيف اليوم التالي.
+          لا تخمن قيمة غير واضحة. ضع ملاحظة وتحذيراً ودرجة ثقة منخفضة بدلاً من التخمين.
+          أعد كائناً بصيغة JSON فقط، يحتوي على المفاتيح rows وdocument_language وwarnings.
+          كل عنصر داخل rows يجب أن يحتوي على pharmacy_name وduty_date وstart_time وend_time وconfidence وnote.'''
+          new_prompt = '''أنت تقرأ صورة جدول المناوبات الرسمي لصيدليات مدينة عامودا في سوريا.
+          تنسيق الجدول المعتاد هو مجموعتان جنب بعض، وكل مجموعة من ثلاثة أعمدة:
+          اليوم والتاريخ | الصيدلية النهارية | الصيدلية المسائية.
+          لكل تاريخ أنشئ صفين مستقلين دائماً:
+          1) الصيدلية تحت النهارية، ووقتها 1:30 PM إلى 5:00 PM، أو الوقت المكتوب في رأس عمود النهارية إن اختلف.
+          2) الصيدلية تحت المساء، ووقتها 8:30 PM إلى 11:30 PM، أو الوقت المكتوب في رأس عمود المساء إن اختلف.
+          قد يبدأ النصف الثاني بتاريخ لاحق أو يكمل إلى الشهر التالي؛ اقرأ التاريخ المكتوب كما هو ولا تعتمد على عنوان الشهر وحده.
+          تجاهل عبارة الدوام المسائي 5:00–8:30 في أسفل الصفحة؛ هذا دوام عام وليس مناوبة ولا تنشئ منه صفاً.
+          استخرج كل تاريخ من المجموعتين وكل اسم صيدلية، ولا تخلط الصيدلية النهارية بالمسائية.
+          لا تستخرج أرقام الهواتف أو روابط الخرائط أو العناوين.
+          حافظ على الاسم كما يظهر، مع تصحيح المسافات الواضحة فقط مثل محمدحسو إلى محمد حسو، وضع الاسم الأصلي في note عند التصحيح.
+          حوّل التاريخ إلى YYYY-MM-DD، والوقت إلى نظام 12 ساعة مع AM أو PM.
+          لا تخمن قيمة غير واضحة؛ أضف تحذيراً ودرجة ثقة منخفضة.
+          أعد كائناً بصيغة JSON فقط، يحتوي على المفاتيح rows وdocument_language وwarnings.
+          كل عنصر داخل rows يجب أن يحتوي على pharmacy_name وduty_date وstart_time وend_time وconfidence وnote.'''
+          replace_once("app/services/gemini.py", old_prompt, new_prompt)
+          PY
+
+      - name: Verify source compiles
+        env:
+          PYTHONDONTWRITEBYTECODE: "1"
+        run: python -m compileall -q app main.py tests
+
+      - name: Commit integration
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add app/keyboards.py app/texts.py app/services/gemini.py
+          git commit -m "Match official Amuda daytime and evening schedule format"
+          git push origin main
