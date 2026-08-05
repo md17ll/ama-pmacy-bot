@@ -206,7 +206,7 @@ async def run_webhook() -> None:
     app.on_cleanup.append(cleanup)
     runner = web.AppRunner(app)
     await runner.setup()
-    site = web.TCPSite(runner, host="0.0.0.0", port=settings.port)
+    site = web.TCPSite(runner, host=None, port=settings.port)
     await site.start()
     logger.info("Webhook server started on port %s", settings.port)
     await asyncio.Event().wait()
