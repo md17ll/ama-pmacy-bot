@@ -2,7 +2,9 @@ from __future__ import annotations
 
 from datetime import date, datetime, time
 from io import BytesIO
+from pathlib import PurePosixPath
 from typing import Any, Iterable
+from zipfile import BadZipFile, ZipFile, is_zipfile
 
 from openpyxl import Workbook, load_workbook
 from openpyxl.styles import Alignment, Font, PatternFill
@@ -26,6 +28,61 @@ PHARMACY_HEADERS = {
     "notes": {"ملاحظات", "notes"},
 }
 
+MAX_XLSX_BYTES = 10 * 1024 * 1024
+MAX_XLSX_UNCOMPRESSED_BYTES = 64 * 1024 * 1024
+MAX_XLSX_ENTRIES = 512
+MAX_WORKBOOK_ROWS = 5000
+MAX_WORKBOOK_COLUMNS = 32
+
+_STATUS_ALIASES = {
+    "active": "active",
+    "فعالة": "active",
+    "فعال": "active",
+    "temporarily_closed": "temporarily_closed",
+    "مغلقة مؤقتاً": "temporarily_closed",
+    "مغلقة مؤقتا": "temporarily_closed",
+    "inactive": "inactive",
+    "متوقفة": "inactive",
+    "متوقف": "inactive",
+}
+
+
+def _validate_xlsx_archive(data: bytes) -> None:
+    if len(data) > MAX_XLSX_BYTES:
+        raise ValueError("حجم ملف Excel أكبر من الحد المسموح")
+    if not is_zipfile(BytesIO(data)):
+        raise ValueError("الملف ليس ملف xlsx صالحاً")
+    try:
+        with ZipFile(BytesIO(data)) as archive:
+            entries = archive.infolist()
+            if len(entries) > MAX_XLSX_ENTRIES:
+                raise ValueError("ملف Excel يحتوي على عدد ملفات داخلي كبير جداً")
+            total_size = 0
+            for entry in entries:
+                path = PurePosixPath(entry.filename)
+                if path.is_absolute() or ".." in path.parts:
+                    raise ValueError("ملف Excel يحتوي على مسار داخلي غير آمن")
+                total_size += entry.file_size
+                if total_size > MAX_XLSX_UNCOMPRESSED_BYTES:
+                    raise ValueError("محتوى ملف Excel بعد فك الضغط أكبر من الحد المسموح")
+    except BadZipFile as exc:
+        raise ValueError("تعذر فتح بنية ملف Excel") from exc
+
+
+def _validate_sheet_size(sheet) -> None:
+    if sheet.max_column and sheet.max_column > MAX_WORKBOOK_COLUMNS:
+        raise ValueError("عدد أعمدة ملف Excel أكبر من الحد المسموح")
+    if sheet.max_row and sheet.max_row > MAX_WORKBOOK_ROWS + 1:
+        raise ValueError("عدد صفوف ملف Excel أكبر من الحد المسموح")
+
+
+def normalize_pharmacy_status(value: Any) -> str:
+    raw = str(value or "active").strip().lower()
+    try:
+        return _STATUS_ALIASES[raw]
+    except KeyError as exc:
+        raise ValueError(f"حالة الصيدلية غير صالحة: {value}") from exc
+
 
 def _normalize_header(value: Any) -> str:
     return str(value or "").strip().lower()
@@ -43,13 +100,13 @@ def _header_map(values: list[Any], definitions: dict[str, set[str]]) -> dict[str
 
 
 def parse_shifts_workbook(data: bytes) -> list[ParsedShift]:
-    if len(data) > 10 * 1024 * 1024:
-        raise ValueError("حجم ملف Excel أكبر من الحد المسموح")
+    _validate_xlsx_archive(data)
     try:
         workbook = load_workbook(BytesIO(data), data_only=True, read_only=True)
     except Exception as exc:
         raise ValueError("تعذر فتح ملف Excel؛ تأكد أنه ملف xlsx صالح") from exc
     sheet = workbook.active
+    _validate_sheet_size(sheet)
     rows = sheet.iter_rows(values_only=True)
     try:
         header = list(next(rows))
@@ -93,13 +150,13 @@ def parse_shifts_workbook(data: bytes) -> list[ParsedShift]:
 
 
 def parse_pharmacies_workbook(data: bytes) -> list[dict[str, Any]]:
-    if len(data) > 10 * 1024 * 1024:
-        raise ValueError("حجم ملف Excel أكبر من الحد المسموح")
+    _validate_xlsx_archive(data)
     try:
         workbook = load_workbook(BytesIO(data), data_only=True, read_only=True)
     except Exception as exc:
         raise ValueError("تعذر فتح ملف Excel") from exc
     sheet = workbook.active
+    _validate_sheet_size(sheet)
     rows = sheet.iter_rows(values_only=True)
     try:
         header = list(next(rows))
@@ -117,7 +174,11 @@ def parse_pharmacies_workbook(data: bytes) -> list[dict[str, Any]]:
         address = str(values[mapping["address"]] or "").strip()
         aliases_raw = str(values[mapping["aliases"]] or "") if "aliases" in mapping else ""
         aliases = [item.strip() for item in aliases_raw.replace("،", ",").split(",") if item.strip()]
-        status = str(values[mapping["status"]] or "active").strip().lower() if "status" in mapping else "active"
+        status = (
+            normalize_pharmacy_status(values[mapping["status"]])
+            if "status" in mapping
+            else "active"
+        )
         notes = str(values[mapping["notes"]] or "").strip() if "notes" in mapping else ""
         if not name or not address:
             raise ValueError(f"السطر {row_number}: الاسم أو العنوان فارغ")

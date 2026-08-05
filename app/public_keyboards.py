@@ -47,6 +47,14 @@ def user_home(
     return keyboard(rows)
 
 
+def user_preview(premium_emoji_id: str | None = None) -> InlineKeyboardMarkup:
+    # Reuse the real public keyboard and add only an admin return button.
+    markup = user_home(is_admin=False, premium_emoji_id=premium_emoji_id)
+    rows = [list(row) for row in markup.inline_keyboard]
+    rows.append([button("⬅️ الرجوع للإدارة", cb.ADMIN_HOME, ButtonStyle.PRIMARY)])
+    return keyboard(rows)
+
+
 def user_results(
     shifts: Iterable[Shift],
     *,

@@ -9,6 +9,7 @@ from app.db import Database
 from app.handlers.common import require_admin, require_writer
 from app.states import PharmacyCreateState, PharmacyEditState, PharmacySearchState
 from app.telegram_utils import answer_callback, safe_edit, try_delete
+from app.utils import html
 
 
 router = Router(name="pharmacies")
@@ -45,7 +46,7 @@ async def pharmacy_add_name(message: Message, bot: Bot, state: FSMContext) -> No
         bot,
         message,
         data,
-        f"💊 الاسم: <b>{name}</b>\n\n📍 أرسل العنوان الكامل للصيدلية.",
+        f"💊 الاسم: <b>{html(name)}</b>\n\n📍 أرسل العنوان الكامل للصيدلية.",
     )
     await try_delete(message)
 

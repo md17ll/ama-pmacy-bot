@@ -114,6 +114,8 @@ def parse_date_value(value: str | date | datetime, *, default_year: int | None =
     raw = normalize_digits(str(value)).strip()
     if not raw:
         raise ValueError("التاريخ فارغ")
+    if len(raw) > 128:
+        raise ValueError("التاريخ أطول من الحد المسموح")
 
     for alias, month in sorted(MONTH_ALIASES.items(), key=lambda item: len(item[0]), reverse=True):
         if alias in raw:
@@ -157,12 +159,17 @@ def parse_time_value(value: str | time | datetime) -> time:
     raw = normalize_digits(str(value)).strip().lower()
     if not raw:
         raise ValueError("الوقت فارغ")
+    if len(raw) > 128:
+        raise ValueError("الوقت أطول من الحد المسموح")
 
+    # Replace complete phrases first, then only standalone ص/م markers.
+    raw = raw.replace("منتصف الليل", "12:00 am")
+    raw = raw.replace("الظهر", "12:00 pm").replace("ظهراً", "12:00 pm")
     raw = raw.replace("صباحًا", "am").replace("صباحاً", "am").replace("صباحا", "am")
-    raw = raw.replace("صباح", "am").replace("ص", "am")
-    raw = raw.replace("مساءً", "pm").replace("مساءً", "pm").replace("مساءا", "pm")
-    raw = raw.replace("مساء", "pm").replace("م", "pm")
-    raw = raw.replace("منتصف الليل", "12:00 am").replace("الظهر", "12:00 pm").replace("ظهراً", "12:00 pm")
+    raw = raw.replace("صباح", "am")
+    raw = raw.replace("مساءً", "pm").replace("مساءا", "pm").replace("مساء", "pm")
+    raw = re.sub(r"(?<!\w)ص(?!\w)", "am", raw)
+    raw = re.sub(r"(?<!\w)م(?!\w)", "pm", raw)
     raw = raw.replace("٫", ":").replace(".", ":")
     raw = re.sub(r"\s+", " ", raw).strip()
 

@@ -22,6 +22,7 @@ from app.utils import (
     parse_date_value,
     parse_time_value,
     utcnow,
+    html,
 )
 
 
@@ -109,10 +110,10 @@ def _shift_detail_text(shift, settings: Settings) -> str:
     end = as_local(shift.end_at, settings.timezone)
     return (
         "📅 <b>تفاصيل المناوبة</b>\n\n"
-        f"💊 {shift.pharmacy.name}\n"
+        f"💊 {html(shift.pharmacy.name)}\n"
         f"📅 {format_date_ar(start)}\n"
         f"🕐 {format_time_ar(start)} – {format_time_ar(end)}\n"
-        f"📍 {shift.pharmacy.address}\n"
+        f"📍 {html(shift.pharmacy.address)}\n"
         f"🆔 رقم المناوبة: {shift.id}"
     )
 
@@ -235,7 +236,7 @@ async def shift_pharmacy_selected(callback: CallbackQuery, db: Database, setting
     await state.set_state(ShiftCreateState.waiting_date)
     await safe_edit(
         callback,
-        f"✅ تم اختيار <b>{pharmacy.name}</b>\n\n📅 أرسل تاريخ المناوبة.\nمثال: <code>2026-08-05</code> أو <code>5 أغسطس 2026</code>",
+        f"✅ تم اختيار <b>{html(pharmacy.name)}</b>\n\n📅 أرسل تاريخ المناوبة.\nمثال: <code>2026-08-05</code> أو <code>5 أغسطس 2026</code>",
         keyboards.simple_back(cb.ADMIN_SHIFTS),
     )
     await answer_callback(callback)
@@ -327,7 +328,7 @@ async def shift_end_received(
         return
     result = (
         heading
-        + f"💊 {pharmacy_name}\n"
+        + f"💊 {html(pharmacy_name)}\n"
         + f"📅 {format_date_ar(start_at, settings.timezone)}\n"
         + f"🕐 {format_time_ar(start_at, settings.timezone)} – {format_time_ar(end_at, settings.timezone)}"
     )

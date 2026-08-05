@@ -9,19 +9,28 @@ from pydantic import BaseModel, Field
 from app.utils import ParsedShift, parse_date_value, parse_time_value
 
 
+MAX_IMAGE_BYTES = 10 * 1024 * 1024
+MAX_GEMINI_ROWS = 500
+GEMINI_TIMEOUT_SECONDS = 90
+
+
 class GeminiShiftRow(BaseModel):
-    pharmacy_name: str = Field(description="اسم الصيدلية كما يظهر في الصورة")
-    duty_date: str = Field(description="التاريخ بصيغة YYYY-MM-DD عند الإمكان")
-    start_time: str = Field(description="وقت بداية المناوبة مع AM أو PM")
-    end_time: str = Field(description="وقت نهاية المناوبة مع AM أو PM")
+    pharmacy_name: str = Field(
+        min_length=1,
+        max_length=255,
+        description="اسم الصيدلية كما يظهر في الصورة",
+    )
+    duty_date: str = Field(max_length=64, description="التاريخ بصيغة YYYY-MM-DD عند الإمكان")
+    start_time: str = Field(max_length=64, description="وقت بداية المناوبة مع AM أو PM")
+    end_time: str = Field(max_length=64, description="وقت نهاية المناوبة مع AM أو PM")
     confidence: float = Field(default=1.0, ge=0.0, le=1.0)
-    note: str | None = None
+    note: str | None = Field(default=None, max_length=500)
 
 
 class GeminiSchedule(BaseModel):
-    rows: list[GeminiShiftRow]
-    document_language: str | None = None
-    warnings: list[str] = Field(default_factory=list)
+    rows: list[GeminiShiftRow] = Field(max_length=MAX_GEMINI_ROWS)
+    document_language: str | None = Field(default=None, max_length=64)
+    warnings: list[str] = Field(default_factory=list, max_length=50)
 
 
 class GeminiScheduleReader:
@@ -36,9 +45,12 @@ class GeminiScheduleReader:
     async def read_image(self, image_bytes: bytes, mime_type: str) -> tuple[list[ParsedShift], list[str]]:
         if not self.api_key:
             raise RuntimeError("مفتاح Gemini غير مضبوط في Railway")
-        if len(image_bytes) > 15 * 1024 * 1024:
+        if len(image_bytes) > MAX_IMAGE_BYTES:
             raise ValueError("حجم الصورة أكبر من الحد المسموح")
-        schedule = await asyncio.to_thread(self._read_image_sync, image_bytes, mime_type)
+        schedule = await asyncio.wait_for(
+            asyncio.to_thread(self._read_image_sync, image_bytes, mime_type),
+            timeout=GEMINI_TIMEOUT_SECONDS,
+        )
         parsed: list[ParsedShift] = []
         warnings = list(schedule.warnings)
         default_year = datetime.now().year

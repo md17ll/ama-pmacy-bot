@@ -9,7 +9,11 @@ from aiogram.types import BufferedInputFile, CallbackQuery, Message
 from app import keyboards, repositories, texts
 from app.db import Database
 from app.handlers.common import require_writer
-from app.services.excel import build_missing_pharmacies_template, parse_pharmacies_workbook
+from app.services.excel import (
+    MAX_XLSX_BYTES,
+    build_missing_pharmacies_template,
+    parse_pharmacies_workbook,
+)
 from app.states import AdminImportState
 from app.telegram_utils import answer_callback, safe_edit, try_delete
 
@@ -107,6 +111,9 @@ async def missing_pharmacies_receive(
     if not filename.lower().endswith(".xlsx"):
         await message.answer("الملف يجب أن يكون بصيغة xlsx.")
         return
+    if document.file_size and document.file_size > MAX_XLSX_BYTES:
+        await message.answer("حجم ملف Excel أكبر من الحد المسموح.")
+        return
 
     status_message = await message.answer("⏳ جاري إضافة الصيدليات وإعادة مطابقة المسودة…")
     added = 0
@@ -123,6 +130,7 @@ async def missing_pharmacies_receive(
                         name=row["name"],
                         address=row["address"],
                         aliases=row["aliases"],
+                        status=row["status"],
                         notes=row["notes"],
                         admin_id=message.from_user.id,
                     )

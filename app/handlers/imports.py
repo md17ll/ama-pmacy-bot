@@ -11,12 +11,13 @@ from app.config import Settings
 from app.db import Database
 from app.handlers.common import require_admin, require_writer
 from app.services.excel import (
+    MAX_XLSX_BYTES,
     build_pharmacies_template,
     build_shifts_template,
     parse_pharmacies_workbook,
     parse_shifts_workbook,
 )
-from app.services.gemini import GeminiScheduleReader
+from app.services.gemini import MAX_IMAGE_BYTES, GeminiScheduleReader
 from app.services.importer import prepare_import_rows
 from app.states import AdminImportState
 from app.telegram_utils import answer_callback, safe_edit, try_delete
@@ -61,9 +62,12 @@ async def gemini_receive_photo(
 ) -> None:
     if await require_writer(message, db) is None:
         return
+    photo = message.photo[-1]
+    if photo.file_size and photo.file_size > MAX_IMAGE_BYTES:
+        await message.answer("حجم الصورة أكبر من الحد المسموح.")
+        return
     status = await message.answer("⏳ جاري تنزيل الصورة وتحليلها بواسطة Gemini…")
     try:
-        photo = message.photo[-1]
         data = await _download_file(bot, photo.file_id)
         parsed_rows, warnings = await gemini_reader.read_image(data, "image/jpeg")
         async with db.session_factory() as session:
@@ -138,6 +142,9 @@ async def excel_receive_document(
     filename = document.file_name or "shifts.xlsx"
     if not filename.lower().endswith(".xlsx"):
         await message.answer("الملف يجب أن يكون بصيغة xlsx.")
+        return
+    if document.file_size and document.file_size > MAX_XLSX_BYTES:
+        await message.answer("حجم ملف Excel أكبر من الحد المسموح.")
         return
     status = await message.answer("⏳ جاري فحص ملف Excel…")
     try:
@@ -400,6 +407,9 @@ async def pharmacy_excel_receive(
     if not (document.file_name or "").lower().endswith(".xlsx"):
         await message.answer("أرسل ملفاً بصيغة xlsx.")
         return
+    if document.file_size and document.file_size > MAX_XLSX_BYTES:
+        await message.answer("حجم ملف Excel أكبر من الحد المسموح.")
+        return
     status_message = await message.answer("⏳ جاري استيراد الصيدليات…")
     added = 0
     skipped: list[str] = []
@@ -414,6 +424,7 @@ async def pharmacy_excel_receive(
                         name=row["name"],
                         address=row["address"],
                         aliases=row["aliases"],
+                        status=row["status"],
                         notes=row["notes"],
                         admin_id=message.from_user.id,
                     )

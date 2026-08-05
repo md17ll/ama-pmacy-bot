@@ -123,7 +123,12 @@ async def _show_period(
     local_day = now.astimezone(settings.timezone).date() + timedelta(days=offset_days)
     start, end = local_day_bounds(local_day, settings.timezone)
     async with db.session_factory() as session:
-        shifts = await repositories.list_shifts_between(session, start, end)
+        shifts = await repositories.list_shifts_between(
+            session,
+            start,
+            end,
+            include_inactive_pharmacies=False,
+        )
         await repositories.record_usage_event(
             session,
             callback.from_user.id,
@@ -222,7 +227,12 @@ async def search_result_handler(
     chat_id = state_data.get("chat_id") or message.chat.id
     now = utcnow()
     async with db.session_factory() as session:
-        matches = await repositories.search_pharmacies(session, query, limit=5)
+        matches = await repositories.search_pharmacies(
+            session,
+            query,
+            limit=5,
+            include_inactive=False,
+        )
         if matches:
             pharmacy = matches[0]
             next_shift = await repositories.next_shift_for_pharmacy(session, pharmacy.id, now)

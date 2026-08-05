@@ -211,8 +211,7 @@ async def admin_preview(callback: CallbackQuery, db: Database, settings: Setting
     await safe_edit(
         callback,
         texts.user_home_text(now, settings.timezone, last_update),
-        public_keyboards.user_home(
-            is_admin=True,
+        public_keyboards.user_preview(
             premium_emoji_id=str(premium_emoji_id) if premium_emoji_id else None,
         ),
     )

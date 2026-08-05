@@ -27,6 +27,7 @@ from app.utils import normalize_text, utcnow
 ADMIN_ROLES = {"owner", "admin", "editor", "viewer"}
 WRITE_ROLES = {"owner", "admin", "editor"}
 OWNER_ROLES = {"owner"}
+PHARMACY_STATUSES = {"active", "temporarily_closed", "inactive"}
 
 
 async def sync_owner_admins(session: AsyncSession, owner_ids: Iterable[int]) -> None:
@@ -199,25 +200,35 @@ async def create_pharmacy(
     name: str,
     address: str,
     aliases: Iterable[str] = (),
+    status: str = "active",
     notes: str | None = None,
     admin_id: int,
 ) -> Pharmacy:
     normalized = normalize_text(name)
     if not normalized:
         raise ValueError("اسم الصيدلية غير صالح")
+    if status not in PHARMACY_STATUSES:
+        raise ValueError("حالة الصيدلية غير صالحة")
     pharmacy = Pharmacy(
         name=name.strip(),
         normalized_name=normalized,
         address=address.strip(),
         notes=notes.strip() if notes else None,
-        status="active",
+        status=status,
     )
+    seen_aliases: set[str] = set()
     for alias in aliases:
         alias = alias.strip()
-        if alias and normalize_text(alias) != normalized:
+        normalized_alias = normalize_text(alias)
+        if (
+            alias
+            and normalized_alias != normalized
+            and normalized_alias not in seen_aliases
+        ):
             pharmacy.aliases.append(
-                PharmacyAlias(alias=alias, normalized_alias=normalize_text(alias))
+                PharmacyAlias(alias=alias, normalized_alias=normalized_alias)
             )
+            seen_aliases.add(normalized_alias)
     session.add(pharmacy)
     try:
         await session.flush()
@@ -301,17 +312,26 @@ async def update_pharmacy(
     if address is not None:
         pharmacy.address = address.strip()
     if status is not None:
+        if status not in PHARMACY_STATUSES:
+            raise ValueError("حالة الصيدلية غير صالحة")
         pharmacy.status = status
     if notes is not None:
         pharmacy.notes = notes.strip() or None
     if aliases is not None:
         pharmacy.aliases.clear()
+        seen_aliases: set[str] = set()
         for alias in aliases:
             alias = alias.strip()
-            if alias and normalize_text(alias) != pharmacy.normalized_name:
+            normalized_alias = normalize_text(alias)
+            if (
+                alias
+                and normalized_alias != pharmacy.normalized_name
+                and normalized_alias not in seen_aliases
+            ):
                 pharmacy.aliases.append(
-                    PharmacyAlias(alias=alias, normalized_alias=normalize_text(alias))
+                    PharmacyAlias(alias=alias, normalized_alias=normalized_alias)
                 )
+                seen_aliases.add(normalized_alias)
     try:
         await session.flush()
     except IntegrityError as exc:
@@ -354,11 +374,21 @@ async def soft_delete_pharmacy(session: AsyncSession, pharmacy_id: int, admin_id
     return True
 
 
-async def search_pharmacies(session: AsyncSession, query: str, limit: int = 10) -> list[Pharmacy]:
+async def search_pharmacies(
+    session: AsyncSession,
+    query: str,
+    limit: int = 10,
+    *,
+    include_inactive: bool = True,
+) -> list[Pharmacy]:
     normalized = normalize_text(query)
     if not normalized:
         return []
-    pharmacies = await list_pharmacies(session, include_inactive=True, limit=500)
+    pharmacies = await list_pharmacies(
+        session,
+        include_inactive=include_inactive,
+        limit=500,
+    )
     scored: list[tuple[float, Pharmacy]] = []
     for pharmacy in pharmacies:
         candidates = [pharmacy.normalized_name, *(alias.normalized_alias for alias in pharmacy.aliases)]
@@ -418,21 +448,26 @@ async def create_shift(
             Shift.pharmacy_id == pharmacy_id,
             Shift.start_at == start_at,
             Shift.end_at == end_at,
-            Shift.active.is_(True),
         )
     )
-    if exact:
+    if exact and exact.active:
         raise ValueError("المناوبة مضافة مسبقاً")
-    shift = Shift(
-        pharmacy_id=pharmacy_id,
-        start_at=start_at,
-        end_at=end_at,
-        created_by=admin_id,
-        import_batch_id=import_batch_id,
-        active=True,
-    )
-    session.add(shift)
-    await session.flush()
+    if exact:
+        shift = exact
+        shift.active = True
+        shift.created_by = admin_id
+        shift.import_batch_id = import_batch_id
+    else:
+        shift = Shift(
+            pharmacy_id=pharmacy_id,
+            start_at=start_at,
+            end_at=end_at,
+            created_by=admin_id,
+            import_batch_id=import_batch_id,
+            active=True,
+        )
+        session.add(shift)
+        await session.flush()
     if log_action:
         session.add(
             AuditLog(
@@ -463,8 +498,9 @@ async def list_shifts_between(
     end_at: datetime,
     *,
     limit: int = 200,
+    include_inactive_pharmacies: bool = True,
 ) -> list[Shift]:
-    result = await session.scalars(
+    query = (
         select(Shift)
         .options(selectinload(Shift.pharmacy))
         .where(
@@ -474,8 +510,11 @@ async def list_shifts_between(
             Pharmacy.deleted_at.is_(None),
         )
         .join(Shift.pharmacy)
-        .order_by(Shift.start_at, Pharmacy.name)
-        .limit(limit)
+    )
+    if not include_inactive_pharmacies:
+        query = query.where(Pharmacy.status == "active")
+    result = await session.scalars(
+        query.order_by(Shift.start_at, Pharmacy.name).limit(limit)
     )
     return list(result)
 
@@ -503,10 +542,13 @@ async def next_shift_for_pharmacy(
     return await session.scalar(
         select(Shift)
         .options(selectinload(Shift.pharmacy))
+        .join(Shift.pharmacy)
         .where(
             Shift.pharmacy_id == pharmacy_id,
             Shift.active.is_(True),
             Shift.end_at > after,
+            Pharmacy.status == "active",
+            Pharmacy.deleted_at.is_(None),
         )
         .order_by(Shift.start_at)
         .limit(1)
@@ -548,6 +590,9 @@ async def update_shift(
         raise ValueError("المناوبة غير موجودة")
     before = serialize_shift(shift)
     if pharmacy_id is not None:
+        pharmacy = await get_pharmacy(session, pharmacy_id)
+        if pharmacy is None:
+            raise ValueError("الصيدلية غير موجودة")
         shift.pharmacy_id = pharmacy_id
     if start_at is not None:
         shift.start_at = start_at
@@ -555,6 +600,16 @@ async def update_shift(
         shift.end_at = end_at
     if shift.end_at <= shift.start_at:
         raise ValueError("وقت النهاية يجب أن يكون بعد البداية")
+    duplicate = await session.scalar(
+        select(Shift.id).where(
+            Shift.id != shift.id,
+            Shift.pharmacy_id == shift.pharmacy_id,
+            Shift.start_at == shift.start_at,
+            Shift.end_at == shift.end_at,
+        )
+    )
+    if duplicate:
+        raise ValueError("توجد مناوبة مطابقة بهذه البيانات")
     session.add(
         AuditLog(
             admin_id=admin_id,
@@ -608,7 +663,15 @@ async def shift_count(session: AsyncSession) -> int:
 
 
 async def latest_shift_end(session: AsyncSession) -> datetime | None:
-    return await session.scalar(select(func.max(Shift.end_at)).where(Shift.active.is_(True)))
+    return await session.scalar(
+        select(func.max(Shift.end_at))
+        .join(Shift.pharmacy)
+        .where(
+            Shift.active.is_(True),
+            Pharmacy.status == "active",
+            Pharmacy.deleted_at.is_(None),
+        )
+    )
 
 
 async def create_import_batch(
@@ -705,27 +768,31 @@ async def publish_import_batch(
 
     inserted = 0
     for row in valid_rows:
-        duplicate = await session.scalar(
-            select(Shift.id).where(
+        exact = await session.scalar(
+            select(Shift).where(
                 Shift.pharmacy_id == row.matched_pharmacy_id,
                 Shift.start_at == row.start_at,
                 Shift.end_at == row.end_at,
-                Shift.active.is_(True),
             )
         )
-        if duplicate:
+        if exact and exact.active:
             row.status = "duplicate"
             continue
-        session.add(
-            Shift(
-                pharmacy_id=row.matched_pharmacy_id,
-                start_at=row.start_at,
-                end_at=row.end_at,
-                import_batch_id=batch.id,
-                created_by=admin_id,
-                active=True,
+        if exact:
+            exact.active = True
+            exact.import_batch_id = batch.id
+            exact.created_by = admin_id
+        else:
+            session.add(
+                Shift(
+                    pharmacy_id=row.matched_pharmacy_id,
+                    start_at=row.start_at,
+                    end_at=row.end_at,
+                    import_batch_id=batch.id,
+                    created_by=admin_id,
+                    active=True,
+                )
             )
-        )
         row.status = "published"
         inserted += 1
 
@@ -883,7 +950,10 @@ async def get_setting(session: AsyncSession, key: str, default: Any = None) -> A
 
 async def set_setting(session: AsyncSession, key: str, value: Any) -> None:
     setting = await session.get(BotSetting, key)
-    if setting is None:
+    if value is None:
+        if setting is not None:
+            await session.delete(setting)
+    elif setting is None:
         session.add(BotSetting(key=key, value=value))
     else:
         setting.value = value
