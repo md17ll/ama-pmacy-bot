@@ -72,33 +72,38 @@ jobs:
           '''
           text = text[:start] + replacement + text[end + 1:]
 
-          marker = '''            [
-                  button(
-                      "➕ تجهيز الصيدليات الناقصة",
-                      f"a:d:missing:{batch_id}",
-                      ButtonStyle.PRIMARY,
-                  )
-              ],'''
-          if marker not in text:
-              raise SystemExit("Draft pharmacy marker not found")
-          text = text.replace(
-              marker,
-              '''            [
-                  button(
-                      "🏥 حفظ أسماء الصيدليات تلقائياً",
-                      f"a:d:auto_pharmacies:{batch_id}",
-                      ButtonStyle.SUCCESS,
-                  )
-              ],
-              [
-                  button(
-                      "📊 إضافة الصيدليات والعناوين عبر Excel",
-                      f"a:d:missing:{batch_id}",
-                      ButtonStyle.PRIMARY,
-                  )
-              ],''',
-              1,
-          )
+          draft_start = text.index("def draft_detail(")
+          draft_end = text.index("\ndef confirm_publish", draft_start)
+          draft_replacement = '''def draft_detail(batch_id: int) -> InlineKeyboardMarkup:
+              return keyboard(
+                  [
+                      [
+                          button("⚠️ مراجعة الأخطاء", f"a:d:errors:{batch_id}"),
+                          button("👁 معاينة كاملة", f"a:d:preview:{batch_id}"),
+                      ],
+                      [
+                          button(
+                              "🏥 حفظ أسماء الصيدليات تلقائياً",
+                              f"a:d:auto_pharmacies:{batch_id}",
+                              ButtonStyle.SUCCESS,
+                          )
+                      ],
+                      [
+                          button(
+                              "📊 إضافة الصيدليات والعناوين عبر Excel",
+                              f"a:d:missing:{batch_id}",
+                              ButtonStyle.PRIMARY,
+                          )
+                      ],
+                      [button("✅ إضافة ونشر", f"a:d:publish_ask:{batch_id}:add", ButtonStyle.SUCCESS)],
+                      [button("🔄 استبدال الفترة ونشر", f"a:d:publish_ask:{batch_id}:replace", ButtonStyle.DANGER)],
+                      [button("🗑 حذف المسودة", f"a:d:cancel_ask:{batch_id}", ButtonStyle.DANGER)],
+                      [button("⬅️ رجوع", cb.ADMIN_DRAFTS)],
+                  ]
+              )
+
+          '''
+          text = text[:draft_start] + draft_replacement + text[draft_end + 1:]
           path.write_text(text, encoding="utf-8")
 
           text_path = Path("app/texts.py")
