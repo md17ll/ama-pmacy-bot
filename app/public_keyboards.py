@@ -1,13 +1,28 @@
 from __future__ import annotations
 
+import os
 from collections.abc import Iterable
 
 from aiogram.enums import ButtonStyle
-from aiogram.types import InlineKeyboardMarkup
+from aiogram.types import InlineKeyboardButton, InlineKeyboardMarkup
 
 from app import callbacks as cb
 from app.keyboards import button, keyboard
 from app.models import Shift
+
+
+DEVELOPER_URL = "https://t.me/md17l"
+
+
+def _developer_button() -> InlineKeyboardButton:
+    premium_emoji_id = os.getenv("PREMIUM_EMOJI_ID", "").strip() or None
+    label = "مطوّر البوت" if premium_emoji_id else "👨‍💻 مطوّر البوت"
+    return InlineKeyboardButton(
+        text=label,
+        url=DEVELOPER_URL,
+        style=ButtonStyle.PRIMARY,
+        icon_custom_emoji_id=premium_emoji_id,
+    )
 
 
 def user_home(is_admin: bool = False) -> InlineKeyboardMarkup:
@@ -23,6 +38,7 @@ def user_home(is_admin: bool = False) -> InlineKeyboardMarkup:
     ]
     if is_admin:
         rows.append([button("⚙️ لوحة الإدارة", cb.ADMIN_HOME, ButtonStyle.PRIMARY)])
+    rows.append([_developer_button()])
     return keyboard(rows)
 
 
@@ -31,7 +47,7 @@ def user_results(
     *,
     refresh_callback: str,
 ) -> InlineKeyboardMarkup:
-    """Show pharmacy names followed only by a contextual refresh button."""
+    """Show pharmacy names, contextual refresh, and a clear back button."""
     rows = []
     seen_pharmacy_ids: set[int] = set()
 
@@ -52,7 +68,6 @@ def user_results(
         if len(seen_pharmacy_ids) >= 20:
             break
 
-    rows.append(
-        [button("🔄 تحديث الوقت", refresh_callback, ButtonStyle.DANGER)]
-    )
+    rows.append([button("🔄 تحديث الوقت", refresh_callback, ButtonStyle.DANGER)])
+    rows.append([button("⬅️ رجوع", cb.USER_HOME, ButtonStyle.PRIMARY)])
     return keyboard(rows)
