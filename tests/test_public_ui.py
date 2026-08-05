@@ -27,7 +27,7 @@ def test_home_button_colors_and_developer_link(monkeypatch) -> None:
     assert buttons["📅 صيدليات اليوم"].style == ButtonStyle.SUCCESS
     assert buttons["⏭ صيدليات غداً"].style == ButtonStyle.SUCCESS
     assert buttons["🔄 تحديث الوقت"].style == ButtonStyle.DANGER
-    assert buttons["👨‍💻 مطوّر البوت"].style == ButtonStyle.PRIMARY
+    assert buttons["👨‍💻 مطوّر البوت"].style == ButtonStyle.SUCCESS
     assert buttons["👨‍💻 مطوّر البوت"].url == DEVELOPER_URL
 
 
@@ -38,6 +38,7 @@ def test_home_supports_premium_custom_emoji(monkeypatch) -> None:
 
     assert developer.text == "مطوّر البوت"
     assert developer.icon_custom_emoji_id == "5368324170671202286"
+    assert developer.style == ButtonStyle.SUCCESS
 
 
 def test_results_show_pharmacies_refresh_and_blue_back() -> None:
