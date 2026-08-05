@@ -235,6 +235,7 @@ async def create_pharmacy(
     except IntegrityError as exc:
         await session.rollback()
         raise ValueError("اسم الصيدلية موجود مسبقاً") from exc
+    await session.refresh(pharmacy, attribute_names=["aliases"])
     session.add(
         AuditLog(
             admin_id=admin_id,
