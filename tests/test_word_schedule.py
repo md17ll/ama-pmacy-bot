@@ -46,8 +46,8 @@ def test_parses_two_side_by_side_periods_from_official_word_layout() -> None:
     assert [(item.pharmacy_name, item.duty_date) for item in parsed[:4]] == [
         ("نور", date(2026, 7, 12)),
         ("يوسف", date(2026, 7, 12)),
-        ("سيدو", date(2026, 7, 31)),
-        ("حسن", date(2026, 7, 31)),
+        ("بيمان", date(2026, 7, 13)),
+        ("رمضان", date(2026, 7, 13)),
     ]
     assert parsed[0].start_time == time(13, 30)
     assert parsed[0].end_time == time(17, 0)
@@ -55,6 +55,7 @@ def test_parses_two_side_by_side_periods_from_official_word_layout() -> None:
     assert parsed[1].end_time == time(23, 30)
     assert parsed[0].raw_data["period"] == "نهارية"
     assert parsed[1].raw_data["period"] == "مسائية"
+    assert [item.row_number for item in parsed] == list(range(1, 9))
 
 
 def test_keeps_dates_that_continue_into_the_next_month() -> None:
