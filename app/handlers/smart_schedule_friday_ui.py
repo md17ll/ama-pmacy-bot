@@ -1,7 +1,6 @@
 from __future__ import annotations
 
 from datetime import date
-from html import escape
 from math import ceil
 
 from aiogram import F
@@ -12,9 +11,10 @@ from app import keyboards, texts
 from app.config import Settings
 from app.db import Database
 from app.handlers import smart_schedule_ui as simple_ui
-from app.handlers import smart_schedules as smart
+from app.handlers import smart_schedules as smart_handlers
 from app.handlers.admin import router
 from app.handlers.common import require_admin, require_writer
+from app.services import smart_schedule as smart_service
 from app.services.friday_history import friday_cycle_for
 from app.services.friday_overrides import (
     build_friday_states,
@@ -53,7 +53,7 @@ def _dates_text(values: tuple[date, ...]) -> str:
 
 async def _load_states(db: Database, settings: Settings, reference_date: date):
     async with db.session_factory() as session:
-        pharmacies, shifts = await smart.smart._active_pharmacies_and_shifts(session) if hasattr(smart, "smart") else await __import__("app.services.smart_schedule", fromlist=["_active_pharmacies_and_shifts"])._active_pharmacies_and_shifts(session)
+        pharmacies, shifts = await smart_service._active_pharmacies_and_shifts(session)
         states = await build_friday_states(
             session,
             pharmacies,
@@ -111,7 +111,7 @@ async def _render_friday_home(
         nav.append(keyboards.button("التالي ▶️", f"a:smart:friday:{page + 1}"))
     if nav:
         rows.append(nav)
-    rows.append([keyboards.button("⬅️ رجوع", smart.SMART_HOME)])
+    rows.append([keyboards.button("⬅️ رجوع", smart_handlers.SMART_HOME)])
 
     await simple_ui._ORIGINAL_SAFE_EDIT(
         callback,
@@ -161,14 +161,20 @@ async def _render_pharmacy(
     ]
     if state.override_count is not None:
         rows.append(
-            [keyboards.button("↩️ إلغاء التعديل اليدوي", f"a:smart:friday:clear:{state.cycle.start.isoformat()}:{pharmacy_id}", ButtonStyle.PRIMARY)]
+            [
+                keyboards.button(
+                    "↩️ إلغاء التعديل اليدوي",
+                    f"a:smart:friday:clear:{state.cycle.start.isoformat()}:{pharmacy_id}",
+                    ButtonStyle.PRIMARY,
+                )
+            ]
         )
     rows.append([keyboards.button("⬅️ رجوع للقائمة", "a:smart:friday:0")])
 
     await simple_ui._ORIGINAL_SAFE_EDIT(
         callback,
         texts.admin_section_text(
-            f"سجل الجمعة › {escape(state.name)}",
+            f"سجل الجمعة › {state.name}",
             "يمكنك تصحيح الرصيد هنا بدون تعديل الصور الأصلية.",
             stats=stats,
             warning="التعديل يؤثر على توزيع الجمعات القادمة فقط، لذلك استخدمه لتصحيح السجل المؤكد.",
@@ -205,7 +211,6 @@ async def smart_friday_set(callback: CallbackQuery, db: Database, settings: Sett
         except ValueError as exc:
             await simple_ui._ORIGINAL_ANSWER_CALLBACK(callback, str(exc), True)
             return
-    await simple_ui._ORIGINAL_ANSWER_CALLBACK(callback, f"تم ضبط رصيد الجمعة على {count}/2.")
     await _render_pharmacy(callback, db, settings, cycle_start=cycle_start, pharmacy_id=pharmacy_id)
 
 
@@ -221,13 +226,16 @@ async def smart_friday_clear(callback: CallbackQuery, db: Database, settings: Se
         await simple_ui._ORIGINAL_ANSWER_CALLBACK(callback, "قيمة التعديل غير صالحة.", True)
         return
     async with db.session_factory() as session:
-        await clear_friday_override(
-            session,
-            reference_date=cycle_start,
-            pharmacy_id=pharmacy_id,
-            admin_id=callback.from_user.id,
-        )
-    await simple_ui._ORIGINAL_ANSWER_CALLBACK(callback, "تم الرجوع إلى مرجع الصورة والجدول المنشور.")
+        try:
+            await clear_friday_override(
+                session,
+                reference_date=cycle_start,
+                pharmacy_id=pharmacy_id,
+                admin_id=callback.from_user.id,
+            )
+        except ValueError as exc:
+            await simple_ui._ORIGINAL_ANSWER_CALLBACK(callback, str(exc), True)
+            return
     await _render_pharmacy(callback, db, settings, cycle_start=cycle_start, pharmacy_id=pharmacy_id)
 
 
