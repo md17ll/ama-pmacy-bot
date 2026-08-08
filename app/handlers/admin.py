@@ -202,7 +202,7 @@ async def admin_preview(callback: CallbackQuery, db: Database, settings: Setting
         return
     now = utcnow()
     async with db.session_factory() as session:
-        last_update = await repositories.latest_published_at(session)
+        current_shifts = await repositories.current_shifts(session, now)
         premium_emoji_id = await repositories.get_setting(
             session,
             "developer_button_emoji_id",
@@ -210,7 +210,7 @@ async def admin_preview(callback: CallbackQuery, db: Database, settings: Setting
         )
     await safe_edit(
         callback,
-        texts.user_home_text(now, settings.timezone, last_update),
+        texts.user_home_text(now, settings.timezone, current_shifts),
         public_keyboards.user_preview(
             premium_emoji_id=str(premium_emoji_id) if premium_emoji_id else None,
         ),
