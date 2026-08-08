@@ -169,16 +169,13 @@ def _choose_ui(text: str, markup: InlineKeyboardMarkup | None):
     if markup is None:
         return _without_help(text), markup
     rows = []
-    rank = 0
     for row in markup.inline_keyboard:
         new_row = []
         for button in row:
             cb = button.callback_data or ""
             if cb.startswith("a:smart:pick:"):
-                rank += 1
                 name = button.text.split(" • ", 1)[0]
-                label = f"⭐ {name}" if rank <= 3 else name
-                new_row.append(keyboards.button(label, cb, ButtonStyle.PRIMARY))
+                new_row.append(keyboards.button(name, cb, ButtonStyle.PRIMARY))
             else:
                 new_row.append(button)
         rows.append(new_row)
@@ -257,6 +254,13 @@ def _publish_ask_ui(text: str, markup: InlineKeyboardMarkup | None):
 
 def _published_ui(text: str, markup: InlineKeyboardMarkup | None):
     stats = [line for line in text.splitlines() if line.startswith("✅ مناوبات منشورة:") or line.startswith("🗑️ مستبدلة:")]
+    if markup is not None:
+        word_cb = _callback_data(markup, "a:smart:word:")
+        rows = []
+        if word_cb:
+            rows.append([keyboards.button("📄 تحميل Word", word_cb, ButtonStyle.PRIMARY)])
+        rows.append([keyboards.button("⬅️ رجوع للقسم", smart.SMART_HOME, ButtonStyle.PRIMARY)])
+        markup = keyboards.keyboard(rows)
     return (
         texts.admin_section_text(
             "تم اعتماد الجدول",
