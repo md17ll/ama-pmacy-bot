@@ -7,6 +7,9 @@ from . import shift_tools as _shift_tools  # noqa: F401,E402
 # admin handlers import the scheduling integration functions.
 from app.services import smart_schedule_history_patch as _smart_schedule_history_patch  # noqa: F401,E402
 
+# Guard batch-bearing smart callbacks before the workflow handlers are registered.
+from . import smart_schedule_guard as _smart_schedule_guard  # noqa: F401,E402
+
 # Attach the intelligent schedule workflow to the existing admin router.
 from . import smart_schedules as _smart_schedules  # noqa: F401,E402
 
