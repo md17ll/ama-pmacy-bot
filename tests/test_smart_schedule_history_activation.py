@@ -10,6 +10,6 @@ def test_bot_handler_import_activates_friday_history_integration() -> None:
         pharmacy_year_statistics,
     )
 
-    assert smart.generate_import_rows is generate_import_rows
-    assert smart.analyze_batch is analyze_batch
-    assert smart.pharmacy_year_statistics is pharmacy_year_statistics
+    assert smart_schedule.generate_import_rows is generate_import_rows
+    assert smart_schedule.analyze_batch is analyze_batch
+    assert smart_schedule.pharmacy_year_statistics is pharmacy_year_statistics
