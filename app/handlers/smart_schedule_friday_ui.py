@@ -177,7 +177,7 @@ async def _render_pharmacy(
             f"سجل الجمعة › {state.name}",
             "يمكنك تصحيح الرصيد هنا بدون تعديل الصور الأصلية.",
             stats=stats,
-            warning="التعديل يؤثر على توزيع الجمعات القادمة فقط، لذلك استخدمه لتصحيح السجل المؤكد.",
+            warning="التعديل يؤثر على توزيع الجمعات القادمة فقط، ولا يمكن خفضه تحت عدد الجمعات المنشورة فعلياً.",
         ),
         keyboards.keyboard(rows),
     )
@@ -199,6 +199,13 @@ async def smart_friday_set(callback: CallbackQuery, db: Database, settings: Sett
         await simple_ui._ORIGINAL_ANSWER_CALLBACK(callback, "قيمة التعديل غير صالحة.", True)
         return
 
+    states = await _load_states(db, settings, cycle_start)
+    state = next((item for item in states if item.pharmacy_id == pharmacy_id), None)
+    if state is None:
+        await simple_ui._ORIGINAL_ANSWER_CALLBACK(callback, "الصيدلية غير موجودة أو غير فعالة.", True)
+        return
+    minimum_count = len(state.database_dates)
+
     async with db.session_factory() as session:
         try:
             await set_friday_override(
@@ -207,6 +214,7 @@ async def smart_friday_set(callback: CallbackQuery, db: Database, settings: Sett
                 pharmacy_id=pharmacy_id,
                 count=count,
                 admin_id=callback.from_user.id,
+                minimum_count=minimum_count,
             )
         except ValueError as exc:
             await simple_ui._ORIGINAL_ANSWER_CALLBACK(callback, str(exc), True)
