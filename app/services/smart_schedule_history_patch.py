@@ -8,7 +8,11 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.models import ImportBatch
 from app.services import smart_schedule as smart
-from app.services.friday_history import friday_cycle_for, friday_history_for_pharmacies
+from app.services.friday_history import (
+    FRIDAY_PAIRS_2026,
+    friday_cycle_for,
+    friday_history_for_pharmacies,
+)
 from app.services.friday_overrides import (
     build_friday_states,
     effective_dates_for_state,
@@ -39,6 +43,7 @@ def _merge_reference_into_ledgers(
         pharmacies,
         year=year,
         before_date=before_date,
+        reference_date=reference_date,
     )
     by_id = {ledger.pharmacy_id: ledger for ledger in ledgers}
     for ledger in ledgers:
@@ -88,6 +93,14 @@ async def _apply_effective_cycle_state(
     return ledgers
 
 
+def _photo_overlap(start_date: date, end_date: date) -> list[date]:
+    return sorted(
+        duty_date
+        for duty_date, _first, _second in FRIDAY_PAIRS_2026
+        if start_date <= duty_date <= end_date
+    )
+
+
 async def generate_import_rows(
     session: AsyncSession,
     *,
@@ -97,6 +110,14 @@ async def generate_import_rows(
     times: ShiftTimes,
     fixed: Mapping[tuple[date, str], int] | None = None,
 ) -> tuple[list[dict[str, Any]], smart.ScheduleAnalysis]:
+    overlap = _photo_overlap(start_date, end_date)
+    if overlap:
+        formatted = "، ".join(value.strftime("%d/%m/%Y") for value in overlap)
+        raise ValueError(
+            "الفترة تتداخل مع جمعات مثبتة في الصور الأصلية "
+            f"({formatted}). ابدأ الجدول بعد آخر تاريخ مصوّر أو عدّل الفترة."
+        )
+
     pharmacies, shifts = await smart._active_pharmacies_and_shifts(session)
     ledgers = smart._build_ledgers(
         pharmacies,
