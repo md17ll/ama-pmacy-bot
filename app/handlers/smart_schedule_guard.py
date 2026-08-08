@@ -57,7 +57,9 @@ def _batch_id_from_callback(data: str) -> tuple[bool, int | None]:
         return True, None
 
 
-@router.callback_query(F.data.startswith("a:smart:"))
+# regexp is intentional: the static button audit must continue validating the
+# real workflow handlers instead of treating this broad guard as their handler.
+@router.callback_query(F.data.regexp(r"^a:smart:"))
 async def smart_batch_source_guard(callback: CallbackQuery, db: Database) -> None:
     needs_validation, batch_id = _batch_id_from_callback(callback.data or "")
     if not needs_validation:
