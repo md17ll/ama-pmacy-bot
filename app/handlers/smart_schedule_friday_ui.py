@@ -22,6 +22,7 @@ from app.services.friday_overrides import (
     current_reference_date,
     set_friday_override,
     state_source_label,
+    unmatched_photo_names,
 )
 
 
@@ -51,7 +52,7 @@ def _dates_text(values: tuple[date, ...]) -> str:
     return "، ".join(_fmt(value) for value in values) if values else "لا يوجد"
 
 
-async def _load_states(db: Database, settings: Settings, reference_date: date):
+async def _load_state_data(db: Database, settings: Settings, reference_date: date):
     async with db.session_factory() as session:
         pharmacies, shifts = await smart_service._active_pharmacies_and_shifts(session)
         states = await build_friday_states(
@@ -62,7 +63,18 @@ async def _load_states(db: Database, settings: Settings, reference_date: date):
             timezone=settings.timezone,
             before_date=None,
         )
-    return sorted(states.values(), key=lambda item: (item.effective_count, item.name))
+        unmatched = unmatched_photo_names(
+            pharmacies,
+            reference_date=reference_date,
+            before_date=None,
+        )
+    ordered = sorted(states.values(), key=lambda item: (item.effective_count, item.name))
+    return ordered, unmatched
+
+
+async def _load_states(db: Database, settings: Settings, reference_date: date):
+    states, _unmatched = await _load_state_data(db, settings, reference_date)
+    return states
 
 
 async def _render_friday_home(
@@ -73,7 +85,7 @@ async def _render_friday_home(
     reference_date: date,
     page: int,
 ) -> None:
-    states = await _load_states(db, settings, reference_date)
+    states, unmatched = await _load_state_data(db, settings, reference_date)
     cycle = friday_cycle_for(reference_date)
     pages = max(1, ceil(len(states) / FRIDAY_PER_PAGE))
     page = min(max(0, page), pages - 1)
@@ -93,6 +105,8 @@ async def _render_friday_home(
     ]
     if over:
         stats.append(f"⚠️ يوجد {over} سجل فوق حد 2/2 ويحتاج مراجعة.")
+    if unmatched:
+        stats.append("⚠️ أسماء من الصورة غير مرتبطة بصيدلية فعالة: " + "، ".join(unmatched))
 
     rows = [
         [
@@ -119,6 +133,7 @@ async def _render_friday_home(
             "سجل الجمعة",
             f"اضغط على أي صيدلية لمراجعة رصيدها أو تعديله. صفحة {page + 1}/{pages}.",
             stats=stats,
+            warning="أسماء الصورة غير المطابقة يجب تصحيح اسم الصيدلية أو إضافة اسم بديل قبل الاعتماد." if unmatched else None,
         ),
         keyboards.keyboard(rows),
     )
