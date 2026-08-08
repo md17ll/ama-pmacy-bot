@@ -65,8 +65,8 @@ async def _save_override_value(
     admin_id: int,
 ) -> None:
     pharmacy = await session.get(Pharmacy, pharmacy_id)
-    if pharmacy is None or pharmacy.deleted_at is not None:
-        raise ValueError("الصيدلية غير موجودة.")
+    if pharmacy is None or pharmacy.deleted_at is not None or pharmacy.status != "active":
+        raise ValueError("الصيدلية غير موجودة أو غير فعالة.")
     if count is not None and not 0 <= count <= FRIDAY_LIMIT:
         raise ValueError("رصيد الجمعة يجب أن يكون بين 0 و2.")
 
@@ -176,6 +176,7 @@ async def build_friday_states(
         pharmacy_list,
         year=reference_date.year,
         before_date=before_date,
+        reference_date=reference_date,
     )
     database = _database_fridays(
         pharmacy_list,
