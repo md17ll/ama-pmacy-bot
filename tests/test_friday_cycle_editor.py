@@ -4,6 +4,8 @@ import asyncio
 from datetime import date
 from zoneinfo import ZoneInfo
 
+import pytest
+
 import app.handlers  # noqa: F401 - activates the smart schedule integration patches
 from app import repositories
 from app.config import Settings
@@ -14,6 +16,7 @@ from app.services.friday_overrides import (
     clear_friday_override,
     set_friday_override,
     state_source_label,
+    unmatched_photo_names,
 )
 from app.services.shift_schedule_tools import ShiftTimes
 
@@ -45,15 +48,12 @@ def test_august_photo_entries_start_new_cycle_at_one_of_two(tmp_path) -> None:
         try:
             async with db.session_factory() as session:
                 names = ["عصام", "محمد حسو", "رشاد", "زنار", "صيدلية جديدة"]
-                pharmacies = []
                 for name in names:
-                    pharmacies.append(
-                        await repositories.create_pharmacy(
-                            session,
-                            name=name,
-                            address="عامودا",
-                            admin_id=1,
-                        )
+                    await repositories.create_pharmacy(
+                        session,
+                        name=name,
+                        address="عامودا",
+                        admin_id=1,
                     )
                 active, shifts = await smart._active_pharmacies_and_shifts(session)
                 states = await build_friday_states(
@@ -72,6 +72,32 @@ def test_august_photo_entries_start_new_cycle_at_one_of_two(tmp_path) -> None:
                 assert by_name["صيدلية جديدة"].effective_count == 0
                 assert date(2026, 2, 20) not in by_name["عصام"].image_dates
                 assert date(2026, 8, 7) in by_name["عصام"].image_dates
+                assert unmatched_photo_names(
+                    active,
+                    reference_date=date(2026, 8, 18),
+                    before_date=date(2026, 8, 18),
+                ) == []
+        finally:
+            await db.dispose()
+
+    asyncio.run(scenario())
+
+
+def test_unmatched_photo_name_is_reported_instead_of_silently_dropped(tmp_path) -> None:
+    async def scenario() -> None:
+        db = Database(_settings(f"sqlite+aiosqlite:///{tmp_path / 'unmatched.db'}"))
+        await db.init()
+        try:
+            async with db.session_factory() as session:
+                for name in ("عصام", "محمد حسو", "رشاد"):
+                    await repositories.create_pharmacy(session, name=name, address="عامودا", admin_id=1)
+                active, _shifts = await smart._active_pharmacies_and_shifts(session)
+                missing = unmatched_photo_names(
+                    active,
+                    reference_date=date(2026, 8, 18),
+                    before_date=date(2026, 8, 18),
+                )
+                assert missing == ["زنار"]
         finally:
             await db.dispose()
 
@@ -135,6 +161,33 @@ def test_manual_override_can_be_set_and_reverted_to_photo(tmp_path) -> None:
                 )
                 assert states[pharmacy.id].effective_count == 1
                 assert states[pharmacy.id].override_count is None
+        finally:
+            await db.dispose()
+
+    asyncio.run(scenario())
+
+
+def test_override_cannot_go_below_published_friday_count(tmp_path) -> None:
+    async def scenario() -> None:
+        db = Database(_settings(f"sqlite+aiosqlite:///{tmp_path / 'minimum.db'}"))
+        await db.init()
+        try:
+            async with db.session_factory() as session:
+                pharmacy = await repositories.create_pharmacy(
+                    session,
+                    name="صيدلية اختبار",
+                    address="عامودا",
+                    admin_id=1,
+                )
+                with pytest.raises(ValueError, match="جمعة منشورة"):
+                    await set_friday_override(
+                        session,
+                        reference_date=date(2026, 8, 18),
+                        pharmacy_id=pharmacy.id,
+                        count=0,
+                        admin_id=1,
+                        minimum_count=1,
+                    )
         finally:
             await db.dispose()
 
