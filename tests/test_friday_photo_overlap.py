@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 import asyncio
-from datetime import date
+from datetime import date, datetime, timedelta
 from zoneinfo import ZoneInfo
 
 import pytest
@@ -69,6 +69,41 @@ def test_generator_refuses_period_crossing_august_cycle_reset(tmp_path) -> None:
                         session,
                         start_date=date(2027, 7, 30),
                         end_date=date(2027, 8, 2),
+                        timezone=TZ,
+                        times=ShiftTimes(),
+                    )
+        finally:
+            await db.dispose()
+
+    asyncio.run(scenario())
+
+
+def test_generator_refuses_period_overlapping_published_shift(tmp_path) -> None:
+    async def scenario() -> None:
+        db = Database(_settings(f"sqlite+aiosqlite:///{tmp_path / 'published-overlap.db'}"))
+        await db.init()
+        try:
+            async with db.session_factory() as session:
+                pharmacy = await repositories.create_pharmacy(
+                    session,
+                    name="صيدلية أ",
+                    address="عامودا",
+                    admin_id=1,
+                )
+                await repositories.create_pharmacy(session, name="صيدلية ب", address="عامودا", admin_id=1)
+                start = datetime(2026, 8, 22, 10, 30, tzinfo=TZ)
+                await repositories.create_shift(
+                    session,
+                    pharmacy_id=pharmacy.id,
+                    start_at=start,
+                    end_at=start + timedelta(hours=3),
+                    admin_id=1,
+                )
+                with pytest.raises(ValueError, match="مناوبات منشورة مسبقاً"):
+                    await smart.generate_import_rows(
+                        session,
+                        start_date=date(2026, 8, 21),
+                        end_date=date(2026, 8, 23),
                         timezone=TZ,
                         times=ShiftTimes(),
                     )
