@@ -54,3 +54,25 @@ def test_generator_refuses_to_replace_a_friday_fixed_by_photo(tmp_path) -> None:
             await db.dispose()
 
     asyncio.run(scenario())
+
+
+def test_generator_refuses_period_crossing_august_cycle_reset(tmp_path) -> None:
+    async def scenario() -> None:
+        db = Database(_settings(f"sqlite+aiosqlite:///{tmp_path / 'cycle-boundary.db'}"))
+        await db.init()
+        try:
+            async with db.session_factory() as session:
+                await repositories.create_pharmacy(session, name="صيدلية أ", address="عامودا", admin_id=1)
+                await repositories.create_pharmacy(session, name="صيدلية ب", address="عامودا", admin_id=1)
+                with pytest.raises(ValueError, match="01/08"):
+                    await smart.generate_import_rows(
+                        session,
+                        start_date=date(2027, 7, 30),
+                        end_date=date(2027, 8, 2),
+                        timezone=TZ,
+                        times=ShiftTimes(),
+                    )
+        finally:
+            await db.dispose()
+
+    asyncio.run(scenario())
