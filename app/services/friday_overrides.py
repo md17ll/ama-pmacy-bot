@@ -63,12 +63,17 @@ async def _save_override_value(
     pharmacy_id: int,
     count: int | None,
     admin_id: int,
+    minimum_count: int = 0,
 ) -> None:
     pharmacy = await session.get(Pharmacy, pharmacy_id)
     if pharmacy is None or pharmacy.deleted_at is not None or pharmacy.status != "active":
         raise ValueError("الصيدلية غير موجودة أو غير فعالة.")
     if count is not None and not 0 <= count <= FRIDAY_LIMIT:
         raise ValueError("رصيد الجمعة يجب أن يكون بين 0 و2.")
+    if count is not None and count < minimum_count:
+        raise ValueError(
+            f"لا يمكن ضبط الرصيد على {count}/2 لأن هناك {minimum_count} جمعة منشورة فعلياً لهذه الصيدلية في الدورة الحالية."
+        )
 
     setting = await session.get(BotSetting, FRIDAY_OVERRIDE_SETTING)
     raw: dict[str, Any] = dict(setting.value) if setting and isinstance(setting.value, dict) else {}
@@ -111,6 +116,7 @@ async def set_friday_override(
     pharmacy_id: int,
     count: int,
     admin_id: int,
+    minimum_count: int = 0,
 ) -> None:
     await _save_override_value(
         session,
@@ -118,6 +124,7 @@ async def set_friday_override(
         pharmacy_id=pharmacy_id,
         count=count,
         admin_id=admin_id,
+        minimum_count=minimum_count,
     )
 
 
