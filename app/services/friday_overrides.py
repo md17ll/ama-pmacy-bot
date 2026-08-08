@@ -8,7 +8,13 @@ from zoneinfo import ZoneInfo
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.models import AuditLog, BotSetting, Pharmacy, Shift
-from app.services.friday_history import FridayCycle, friday_cycle_for, friday_history_for_pharmacies
+from app.services.friday_history import (
+    FRIDAY_PAIRS_2026,
+    FridayCycle,
+    compact_pharmacy_key,
+    friday_cycle_for,
+    friday_history_for_pharmacies,
+)
 from app.utils import as_local, utcnow
 
 
@@ -165,6 +171,34 @@ def _database_fridays(
         if duty_date.weekday() == 4:
             result[shift.pharmacy_id].add(duty_date)
     return result
+
+
+def unmatched_photo_names(
+    pharmacies: Iterable[Pharmacy],
+    *,
+    reference_date: date,
+    before_date: date | None = None,
+) -> list[str]:
+    """Return photographed names in this cycle that match no active pharmacy/alias."""
+    cycle = friday_cycle_for(reference_date)
+    known: set[str] = set()
+    for pharmacy in pharmacies:
+        known.add(compact_pharmacy_key(pharmacy.name))
+        for alias in getattr(pharmacy, "aliases", ()) or ():
+            value = getattr(alias, "alias", "")
+            if value:
+                known.add(compact_pharmacy_key(value))
+
+    missing: set[str] = set()
+    for duty_date, first_name, second_name in FRIDAY_PAIRS_2026:
+        if not (cycle.start <= duty_date <= cycle.end):
+            continue
+        if before_date is not None and duty_date >= before_date:
+            continue
+        for name in (first_name, second_name):
+            if compact_pharmacy_key(name) not in known:
+                missing.add(name)
+    return sorted(missing)
 
 
 async def build_friday_states(
