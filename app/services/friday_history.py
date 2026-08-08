@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
-from datetime import date
+from datetime import date, timedelta
 from typing import Iterable
 
 from app.models import Pharmacy
@@ -122,13 +122,11 @@ class FridayHistoryCredit:
 def friday_cycle_for(value: date) -> FridayCycle:
     if value.month >= FRIDAY_CYCLE_START_MONTH:
         start = date(value.year, FRIDAY_CYCLE_START_MONTH, 1)
-        end = date(value.year + 1, FRIDAY_CYCLE_START_MONTH, 1).replace(day=1)
+        next_start = date(value.year + 1, FRIDAY_CYCLE_START_MONTH, 1)
     else:
         start = date(value.year - 1, FRIDAY_CYCLE_START_MONTH, 1)
-        end = date(value.year, FRIDAY_CYCLE_START_MONTH, 1).replace(day=1)
-    from datetime import timedelta
-
-    return FridayCycle(start=start, end=end - timedelta(days=1))
+        next_start = date(value.year, FRIDAY_CYCLE_START_MONTH, 1)
+    return FridayCycle(start=start, end=next_start - timedelta(days=1))
 
 
 def compact_pharmacy_key(value: str) -> str:
@@ -149,17 +147,16 @@ def friday_history_for_pharmacies(
     *,
     year: int,
     before_date: date | None = None,
+    reference_date: date | None = None,
 ) -> dict[int, FridayHistoryCredit]:
-    """Return photo reference credit for the Friday cycle containing before_date.
+    """Return photo-reference credit for one August-to-July Friday cycle.
 
-    The business cycle resets every 1 August.  The ``year`` argument is kept for
-    backward compatibility with older callers, but the cycle boundary is derived
-    from ``before_date`` when supplied.  Old 1/2–2/2 count-page floors belong only
-    to the historical cycle that started 2025-08-01 and never carry into the
-    2026-08-01 cycle.
+    ``reference_date`` chooses the cycle explicitly. ``before_date`` is only a
+    cutoff and prevents future photographed rows from leaking into generation.
+    The old 1/2–2/2 count-page floors are archival and never carry into the
+    cycle beginning 2026-08-01.
     """
-    reference_date = before_date or date(year, 12, 31)
-    cycle = friday_cycle_for(reference_date)
+    cycle = friday_cycle_for(reference_date or before_date or date(year, 12, 31))
 
     pharmacy_list = list(pharmacies)
     key_to_id: dict[str, int] = {}
@@ -179,9 +176,7 @@ def friday_history_for_pharmacies(
                 dates_by_id[pharmacy_id].add(duty_date)
 
     floors_by_id: dict[int, int] = {pharmacy.id: 0 for pharmacy in pharmacy_list}
-    apply_old_floor = cycle.start == OLD_REFERENCE_CYCLE_START and (
-        before_date is None or before_date > cycle.end
-    )
+    apply_old_floor = cycle.start == OLD_REFERENCE_CYCLE_START and before_date is None
     if apply_old_floor:
         for name, floor in FRIDAY_COUNT_FLOORS_2026.items():
             pharmacy_id = key_to_id.get(compact_pharmacy_key(name))
