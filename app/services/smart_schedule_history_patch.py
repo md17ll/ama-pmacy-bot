@@ -101,6 +101,16 @@ def _photo_overlap(start_date: date, end_date: date) -> list[date]:
     )
 
 
+def _ensure_single_friday_cycle(start_date: date, end_date: date) -> None:
+    start_cycle = friday_cycle_for(start_date)
+    end_cycle = friday_cycle_for(end_date)
+    if start_cycle.start != end_cycle.start:
+        raise ValueError(
+            "الفترة تعبر بداية دورة الجمعة في 01/08. "
+            "أنشئ جدولاً ينتهي في 31/07 ثم جدولاً جديداً يبدأ من 01/08 حتى يتصفّر رصيد الجمعة بشكل صحيح."
+        )
+
+
 async def generate_import_rows(
     session: AsyncSession,
     *,
@@ -110,6 +120,8 @@ async def generate_import_rows(
     times: ShiftTimes,
     fixed: Mapping[tuple[date, str], int] | None = None,
 ) -> tuple[list[dict[str, Any]], smart.ScheduleAnalysis]:
+    _ensure_single_friday_cycle(start_date, end_date)
+
     overlap = _photo_overlap(start_date, end_date)
     if overlap:
         formatted = "، ".join(value.strftime("%d/%m/%Y") for value in overlap)
