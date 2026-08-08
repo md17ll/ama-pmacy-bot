@@ -10,6 +10,8 @@ from app.utils import normalize_text
 
 REFERENCE_YEAR = 2026
 REFERENCE_THROUGH = date(2026, 8, 14)
+FRIDAY_CYCLE_START_MONTH = 8
+OLD_REFERENCE_CYCLE_START = date(2025, 8, 1)
 REFERENCE_SOURCES = (
     "1000327660.jpg",
     "1000327670.jpg",
@@ -17,9 +19,8 @@ REFERENCE_SOURCES = (
     "1000327643.jpg",
 )
 
-# The two notebook pages contain the dated Friday pair history.  Pair order is
-# intentionally NOT interpreted as daytime/evening because the handwriting
-# only establishes that both pharmacies were assigned that Friday.
+# هذه القائمة منقولة من صور الدفتر المرسلة من المستخدم.
+# ترتيب الاسمين لا يعني نهاري/ليلي؛ الصورة تثبت فقط أن الصيدليتين أخذتا الجمعة.
 FRIDAY_PAIRS_2026: tuple[tuple[date, str, str], ...] = (
     (date(2026, 1, 2), "عامودا", "سيدو"),
     (date(2026, 1, 9), "رشاد", "افا"),
@@ -56,11 +57,8 @@ FRIDAY_PAIRS_2026: tuple[tuple[date, str, str], ...] = (
     (date(2026, 8, 14), "رشاد", "زنار"),
 )
 
-# The two count pages are kept as a minimum-credit reference.  They show 1/2
-# or 2/2 but do not provide a date for every credit.  A floor prevents a
-# pharmacy from losing an already-recorded Friday just because its exact date
-# is absent from the dated pages.  Exact dated records can legitimately make
-# the real historical count higher than this capped 1/2–2/2 reference.
+# هذه القيم من صور العدّاد 1/2 و2/2. نحفظها كمرجع للصورة القديمة فقط.
+# لا تُحمّل إلى دورة تبدأ في آب 2026 أو أي دورة لاحقة.
 FRIDAY_COUNT_FLOORS_2026: dict[str, int] = {
     "يوسف": 1,
     "مروى": 2,
@@ -102,9 +100,35 @@ FRIDAY_COUNT_FLOORS_2026: dict[str, int] = {
 
 
 @dataclass(frozen=True, slots=True)
+class FridayCycle:
+    start: date
+    end: date
+
+    @property
+    def key(self) -> str:
+        return self.start.isoformat()
+
+    @property
+    def label(self) -> str:
+        return f"{self.start.year}/{self.end.year}"
+
+
+@dataclass(frozen=True, slots=True)
 class FridayHistoryCredit:
     dates: frozenset[date]
     floor: int
+
+
+def friday_cycle_for(value: date) -> FridayCycle:
+    if value.month >= FRIDAY_CYCLE_START_MONTH:
+        start = date(value.year, FRIDAY_CYCLE_START_MONTH, 1)
+        end = date(value.year + 1, FRIDAY_CYCLE_START_MONTH, 1).replace(day=1)
+    else:
+        start = date(value.year - 1, FRIDAY_CYCLE_START_MONTH, 1)
+        end = date(value.year, FRIDAY_CYCLE_START_MONTH, 1).replace(day=1)
+    from datetime import timedelta
+
+    return FridayCycle(start=start, end=end - timedelta(days=1))
 
 
 def compact_pharmacy_key(value: str) -> str:
@@ -126,15 +150,16 @@ def friday_history_for_pharmacies(
     year: int,
     before_date: date | None = None,
 ) -> dict[int, FridayHistoryCredit]:
-    """Match the user-provided Friday reference to current pharmacy records.
+    """Return photo reference credit for the Friday cycle containing before_date.
 
-    Exact dates are included only before ``before_date`` when provided, which
-    prevents future reference rows from leaking into an earlier back-test.  The
-    undated 1/2–2/2 floors are applied only once the requested period is after
-    the reference-through date.  For later years the annual ledger resets.
+    The business cycle resets every 1 August.  The ``year`` argument is kept for
+    backward compatibility with older callers, but the cycle boundary is derived
+    from ``before_date`` when supplied.  Old 1/2–2/2 count-page floors belong only
+    to the historical cycle that started 2025-08-01 and never carry into the
+    2026-08-01 cycle.
     """
-    if year != REFERENCE_YEAR:
-        return {}
+    reference_date = before_date or date(year, 12, 31)
+    cycle = friday_cycle_for(reference_date)
 
     pharmacy_list = list(pharmacies)
     key_to_id: dict[str, int] = {}
@@ -144,6 +169,8 @@ def friday_history_for_pharmacies(
 
     dates_by_id: dict[int, set[date]] = {pharmacy.id: set() for pharmacy in pharmacy_list}
     for duty_date, first_name, second_name in FRIDAY_PAIRS_2026:
+        if not (cycle.start <= duty_date <= cycle.end):
+            continue
         if before_date is not None and duty_date >= before_date:
             continue
         for name in (first_name, second_name):
@@ -151,9 +178,11 @@ def friday_history_for_pharmacies(
             if pharmacy_id is not None:
                 dates_by_id[pharmacy_id].add(duty_date)
 
-    apply_floors = before_date is None or before_date > REFERENCE_THROUGH
     floors_by_id: dict[int, int] = {pharmacy.id: 0 for pharmacy in pharmacy_list}
-    if apply_floors:
+    apply_old_floor = cycle.start == OLD_REFERENCE_CYCLE_START and (
+        before_date is None or before_date > cycle.end
+    )
+    if apply_old_floor:
         for name, floor in FRIDAY_COUNT_FLOORS_2026.items():
             pharmacy_id = key_to_id.get(compact_pharmacy_key(name))
             if pharmacy_id is not None:
@@ -176,5 +205,6 @@ def reference_summary() -> dict[str, int | str]:
         "dated_fridays": len(FRIDAY_PAIRS_2026),
         "dated_assignments": len(FRIDAY_PAIRS_2026) * 2,
         "count_floor_pharmacies": len(FRIDAY_COUNT_FLOORS_2026),
+        "cycle_start_month": FRIDAY_CYCLE_START_MONTH,
         "sources": len(REFERENCE_SOURCES),
     }
