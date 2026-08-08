@@ -16,7 +16,7 @@ from app.config import Settings
 from app.db import Database
 from app.handlers.admin import router
 from app.handlers.common import require_admin, require_writer
-from app.models import ImportBatch, ImportRow, Pharmacy, Shift
+from app.models import ImportBatch, ImportRow, Shift
 from app.services.shift_schedule_tools import get_shift_times
 from app.services.smart_schedule import (
     DAY,
@@ -31,12 +31,12 @@ from app.services.smart_schedule import (
 )
 from app.services.word_export import WordExportError, build_official_word_schedule
 from app.telegram_utils import answer_callback, safe_edit
-from app.utils import as_local, format_date_ar, utcnow
+from app.utils import as_local, utcnow
 
 
 SMART_HOME = "a:smart"
-PAGE_SIZE = 7
-STATS_PAGE_SIZE = 6
+DAYS_PER_PAGE = 7
+STATS_PER_PAGE = 6
 
 
 def _install_admin_entry_button() -> None:
@@ -47,13 +47,10 @@ def _install_admin_entry_button() -> None:
     def wrapped_admin_home():
         markup = current()
         rows = [list(row) for row in markup.inline_keyboard]
-        new_button = keyboards.button(
-            "🧠 مولّد الجداول الذكي",
-            SMART_HOME,
-            ButtonStyle.SUCCESS,
+        rows.insert(
+            4 if len(rows) >= 4 else len(rows),
+            [keyboards.button("🧠 مولّد الجداول الذكي", SMART_HOME, ButtonStyle.SUCCESS)],
         )
-        insert_at = 4 if len(rows) >= 4 else len(rows)
-        rows.insert(insert_at, [new_button])
         return keyboards.keyboard(rows)
 
     setattr(wrapped_admin_home, "_smart_schedule_wrapped", True)
@@ -63,98 +60,86 @@ def _install_admin_entry_button() -> None:
 _install_admin_entry_button()
 
 
-def _explain(*lines: str) -> list[str]:
-    return [f"🔹 {line}" for line in lines]
+def _help(*items: str) -> list[str]:
+    return [f"🔹 {item}" for item in items]
 
 
-def _date_text(value: date) -> str:
-    return value.strftime("%d/%m/%Y")
+def _date_text(value: date | None) -> str:
+    return value.strftime("%d/%m/%Y") if value else "غير محدد"
 
 
-def _row_period(row: ImportRow, timezone) -> str:
-    period = str((row.raw_data or {}).get("period") or "")
-    if period in {DAY, EVENING}:
-        return period
+def _period(row: ImportRow, timezone) -> str:
+    value = str((row.raw_data or {}).get("period") or "")
+    if value in {DAY, EVENING}:
+        return value
     if row.start_at is None:
         return DAY
     return DAY if as_local(row.start_at, timezone).hour < 18 else EVENING
 
 
-def _row_name(row: ImportRow) -> str:
-    if row.matched_pharmacy:
-        return row.matched_pharmacy.name
-    return row.raw_pharmacy_name
+def _name(row: ImportRow | None) -> str:
+    if row is None:
+        return "غير محدد"
+    return row.matched_pharmacy.name if row.matched_pharmacy else row.raw_pharmacy_name
 
 
-def _batch_days(batch: ImportBatch, timezone) -> list[tuple[date, ImportRow | None, ImportRow | None]]:
+def _days(batch: ImportBatch, timezone) -> list[tuple[date, ImportRow | None, ImportRow | None]]:
     grouped: dict[date, dict[str, ImportRow]] = defaultdict(dict)
     for row in batch.rows:
-        if row.start_at is None:
-            continue
-        duty_date = as_local(row.start_at, timezone).date()
-        grouped[duty_date][_row_period(row, timezone)] = row
+        if row.start_at:
+            grouped[as_local(row.start_at, timezone).date()][_period(row, timezone)] = row
     return [
         (duty_date, values.get(DAY), values.get(EVENING))
         for duty_date, values in sorted(grouped.items())
     ]
 
 
-async def _latest_smart_draft(session) -> ImportBatch | None:
+async def _latest_draft(session) -> ImportBatch | None:
     return await session.scalar(
         select(ImportBatch)
         .options(selectinload(ImportBatch.rows).selectinload(ImportRow.matched_pharmacy))
-        .where(
-            ImportBatch.source_type == SMART_SOURCE_TYPE,
-            ImportBatch.status == "draft",
-        )
+        .where(ImportBatch.source_type == SMART_SOURCE_TYPE, ImportBatch.status == "draft")
         .order_by(ImportBatch.created_at.desc(), ImportBatch.id.desc())
         .limit(1)
     )
 
 
-async def _smart_published_batches(session, limit: int = 50) -> list[ImportBatch]:
+async def _published(session, limit: int = 100) -> list[ImportBatch]:
     result = await session.scalars(
         select(ImportBatch)
-        .where(
-            ImportBatch.source_type == SMART_SOURCE_TYPE,
-            ImportBatch.status == "published",
-        )
+        .where(ImportBatch.source_type == SMART_SOURCE_TYPE, ImportBatch.status == "published")
         .order_by(ImportBatch.published_at.desc(), ImportBatch.id.desc())
         .limit(limit)
     )
     return list(result)
 
 
-async def _render_smart_home(callback: CallbackQuery, db: Database, settings: Settings) -> None:
-    if await require_admin(callback, db) is None:
-        return
+async def _render_home(callback: CallbackQuery, db: Database, settings: Settings) -> None:
     async with db.session_factory() as session:
-        latest_end = await repositories.latest_shift_end(session)
-        draft = await _latest_smart_draft(session)
-        published = await _smart_published_batches(session)
-    if latest_end:
-        latest_local = as_local(latest_end, settings.timezone).date()
-        latest_line = f"📋 آخر يوم منشور: {_date_text(latest_local)}"
-        next_line = f"⏭️ بداية الجدول المقترحة: {_date_text(latest_local + timedelta(days=1))}"
-    else:
-        latest_line = "📋 لا يوجد جدول منشور حالياً."
-        next_line = "⏭️ سيبدأ الجدول المقترح من تاريخ اليوم."
-
-    button_help = [
-        "✨ إنشاء جدول جديد — ينشئ مسودة ذكية فقط، ولا ينشر شيئاً تلقائياً.",
-        "📊 إحصائيات الصيدليات — يعرض كل مناوبات الصيدليات والنهاري والليلي والجمعات والعدالة.",
-        "📚 الجداول الذكية السابقة — يفتح الجداول التي تم اعتمادها من هذا القسم.",
-        "⚙️ قواعد التوزيع — يوضح القواعد التي يحلل بها البوت كل اختيار.",
-        "🔙 رجوع — يرجع إلى لوحة الإدارة.",
+        latest = await repositories.latest_shift_end(session)
+        draft = await _latest_draft(session)
+        published = await _published(session)
+    latest_date = as_local(latest, settings.timezone).date() if latest else None
+    lines = [
+        f"📋 آخر يوم منشور: {_date_text(latest_date)}",
+        f"⏭️ بداية الجدول التالي: {_date_text(latest_date + timedelta(days=1))}" if latest_date else "⏭️ سيبدأ الجدول من تاريخ اليوم.",
+        f"📚 الجداول الذكية المنشورة: {len(published)}",
+        *_help(
+            "✨ إنشاء جدول جديد — ينشئ مسودة فقط ولا ينشر تلقائياً.",
+            "📊 إحصائيات الصيدليات — يعرض كل المناوبات والنهاري والليلي والجمعات والعدالة.",
+            "📚 الجداول السابقة — يفتح الجداول التي اعتمدتها من المولّد.",
+            "⚙️ قواعد التوزيع — يشرح كيف يحلل البوت الاختيارات.",
+            "🔙 رجوع — يرجع للوحة الإدارة.",
+        ),
     ]
     rows = [[keyboards.button("✨ إنشاء جدول جديد", "a:smart:new", ButtonStyle.SUCCESS)]]
     if draft:
-        button_help.insert(1, "📝 فتح المسودة الحالية — يكمل المراجعة والتعديل قبل النشر.")
+        lines.insert(3, "🔹 📝 فتح المسودة الحالية — يكمل المراجعة والتعديل قبل النشر.")
         rows.append([keyboards.button("📝 فتح المسودة الحالية", f"a:smart:draft:{draft.id}", ButtonStyle.PRIMARY)])
     rows.extend(
         [
             [keyboards.button("📊 إحصائيات الصيدليات", "a:smart:stats", ButtonStyle.PRIMARY)],
-            [keyboards.button("📚 الجداول الذكية السابقة", "a:smart:history:0", ButtonStyle.PRIMARY)],
+            [keyboards.button("📚 الجداول السابقة", "a:smart:history:0", ButtonStyle.PRIMARY)],
             [keyboards.button("⚙️ قواعد التوزيع", "a:smart:rules", ButtonStyle.PRIMARY)],
             [keyboards.button("⬅️ رجوع", cb.ADMIN_HOME)],
         ]
@@ -163,8 +148,8 @@ async def _render_smart_home(callback: CallbackQuery, db: Database, settings: Se
         callback,
         texts.admin_section_text(
             "مولّد الجداول الذكي",
-            "هذا القسم ينشئ الجدول كمسودة، يحلله، يسمح لك بمراجعته وتعديله، ثم لا ينشره إلا بعد تأكيدك النهائي.",
-            stats=[latest_line, next_line, f"📚 جداول ذكية منشورة: {len(published)}", *_explain(*button_help)],
+            "المسار دائماً: توليد مسودة ← عرض ← تحليل ← تعديل ← Word ← تأكيد نهائي ← نشر.",
+            stats=lines,
         ),
         keyboards.keyboard(rows),
     )
@@ -173,42 +158,26 @@ async def _render_smart_home(callback: CallbackQuery, db: Database, settings: Se
 
 @router.callback_query(F.data == "a:smart")
 async def smart_home(callback: CallbackQuery, db: Database, settings: Settings) -> None:
-    await _render_smart_home(callback, db, settings)
-
-
-@router.callback_query(F.data == "a:smart:new")
-async def smart_new(callback: CallbackQuery, db: Database, settings: Settings) -> None:
-    if await require_writer(callback, db) is None:
+    if await require_admin(callback, db) is None:
         return
-    async with db.session_factory() as session:
-        draft = await _latest_smart_draft(session)
-        latest_end = await repositories.latest_shift_end(session)
-    if draft:
-        await answer_callback(callback, "يوجد مسودة ذكية حالياً. افتحها أو احذفها قبل إنشاء مسودة جديدة.", alert=True)
-        await _render_draft(callback, db, settings, draft.id)
-        return
-    start_date, end_date = default_period(latest_end, settings.timezone)
-    await _render_range(callback, db, start_date, end_date)
+    await _render_home(callback, db, settings)
 
 
-async def _render_range(callback: CallbackQuery, db: Database, start_date: date, end_date: date) -> None:
-    if await require_writer(callback, db) is None:
-        return
-    days = (end_date - start_date).days + 1
+async def _render_range(callback: CallbackQuery, start_date: date, end_date: date) -> None:
     await safe_edit(
         callback,
         texts.admin_section_text(
             "إنشاء جدول ذكي جديد",
-            "راجع تاريخ البداية والنهاية أولاً. عند الضغط على التوليد سيُنشأ جدول كامل كمسودة فقط.",
+            "راجع الفترة. التوليد ينشئ مسودة قابلة للمراجعة والتعديل ولا ينشر أي مناوبة.",
             stats=[
                 f"📅 البداية: {_date_text(start_date)}",
                 f"📅 النهاية: {_date_text(end_date)}",
-                f"🗓️ عدد الأيام: {days}",
-                *_explain(
-                    "➖ يوم — يقصّر نهاية الفترة يوماً واحداً.",
-                    "➕ يوم — يمدد نهاية الفترة يوماً واحداً.",
-                    "🧠 توليد المسودة الذكية — يحلل التاريخ السابق لكل صيدلية ويولد النهاري والليلي والجمعات.",
-                    "🔙 رجوع — يرجع للقسم الذكي بدون إنشاء شيء.",
+                f"🗓️ عدد الأيام: {(end_date - start_date).days + 1}",
+                *_help(
+                    "➖ يوم — يقصر نهاية الفترة يوماً.",
+                    "➕ يوم — يمدد نهاية الفترة يوماً.",
+                    "🧠 توليد المسودة — يحلل تاريخ الصيدليات ثم يولد الجدول.",
+                    "🔙 رجوع — يرجع بدون إنشاء شيء.",
                 ),
             ],
         ),
@@ -218,7 +187,7 @@ async def _render_range(callback: CallbackQuery, db: Database, start_date: date,
                     keyboards.button("➖ يوم", f"a:smart:range:{start_date.isoformat()}:{(end_date - timedelta(days=1)).isoformat()}"),
                     keyboards.button("➕ يوم", f"a:smart:range:{start_date.isoformat()}:{(end_date + timedelta(days=1)).isoformat()}"),
                 ],
-                [keyboards.button("🧠 توليد المسودة الذكية", f"a:smart:generate:{start_date.isoformat()}:{end_date.isoformat()}", ButtonStyle.SUCCESS)],
+                [keyboards.button("🧠 توليد المسودة", f"a:smart:generate:{start_date.isoformat()}:{end_date.isoformat()}", ButtonStyle.SUCCESS)],
                 [keyboards.button("⬅️ رجوع", SMART_HOME)],
             ]
         ),
@@ -226,22 +195,35 @@ async def _render_range(callback: CallbackQuery, db: Database, start_date: date,
     await answer_callback(callback)
 
 
+@router.callback_query(F.data == "a:smart:new")
+async def smart_new(callback: CallbackQuery, db: Database, settings: Settings) -> None:
+    if await require_writer(callback, db) is None:
+        return
+    async with db.session_factory() as session:
+        draft = await _latest_draft(session)
+        latest = await repositories.latest_shift_end(session)
+    if draft:
+        await answer_callback(callback, "يوجد مسودة ذكية حالياً. افتحها أو احذفها أولاً.", alert=True)
+        await _render_draft(callback, db, settings, draft.id)
+        return
+    start_date, end_date = default_period(latest, settings.timezone)
+    await _render_range(callback, start_date, end_date)
+
+
 @router.callback_query(F.data.startswith("a:smart:range:"))
 async def smart_range(callback: CallbackQuery, db: Database) -> None:
+    if await require_writer(callback, db) is None:
+        return
     try:
         _, _, _, start_raw, end_raw = callback.data.split(":", 4)
-        start_date = date.fromisoformat(start_raw)
-        end_date = date.fromisoformat(end_raw)
+        start_date, end_date = date.fromisoformat(start_raw), date.fromisoformat(end_raw)
     except (ValueError, AttributeError):
         await answer_callback(callback, "التاريخ غير صالح.", alert=True)
         return
-    if end_date < start_date:
-        await answer_callback(callback, "لا يمكن أن تكون نهاية الجدول قبل البداية.", alert=True)
+    if end_date < start_date or (end_date - start_date).days > 92:
+        await answer_callback(callback, "الفترة غير صالحة. الحد الأقصى 93 يوماً.", alert=True)
         return
-    if (end_date - start_date).days > 92:
-        await answer_callback(callback, "الحد الأقصى 93 يوماً للجدول الواحد.", alert=True)
-        return
-    await _render_range(callback, db, start_date, end_date)
+    await _render_range(callback, start_date, end_date)
 
 
 @router.callback_query(F.data.startswith("a:smart:generate:"))
@@ -250,19 +232,18 @@ async def smart_generate(callback: CallbackQuery, db: Database, settings: Settin
         return
     try:
         _, _, _, start_raw, end_raw = callback.data.split(":", 4)
-        start_date = date.fromisoformat(start_raw)
-        end_date = date.fromisoformat(end_raw)
+        start_date, end_date = date.fromisoformat(start_raw), date.fromisoformat(end_raw)
     except (ValueError, AttributeError):
         await answer_callback(callback, "التاريخ غير صالح.", alert=True)
         return
     async with db.session_factory() as session:
-        existing = await _latest_smart_draft(session)
-        if existing:
-            batch_id = existing.id
+        old = await _latest_draft(session)
+        if old:
+            batch_id = old.id
         else:
             try:
                 times = await get_shift_times(session)
-                rows, analysis = await generate_import_rows(
+                prepared, analysis = await generate_import_rows(
                     session,
                     start_date=start_date,
                     end_date=end_date,
@@ -275,7 +256,7 @@ async def smart_generate(callback: CallbackQuery, db: Database, settings: Settin
                     source_name=f"جدول ذكي {_date_text(start_date)} - {_date_text(end_date)}",
                     source_file_id=None,
                     created_by=callback.from_user.id,
-                    rows=rows,
+                    rows=prepared,
                 )
                 batch.summary = {**batch.summary, "smart_analysis": analysis.as_dict()}
                 await session.commit()
@@ -288,38 +269,35 @@ async def smart_generate(callback: CallbackQuery, db: Database, settings: Settin
 
 
 async def _render_draft(callback: CallbackQuery, db: Database, settings: Settings, batch_id: int) -> None:
-    if await require_admin(callback, db) is None:
-        return
     async with db.session_factory() as session:
         batch = await repositories.get_import_batch(session, batch_id)
         if batch is None or batch.source_type != SMART_SOURCE_TYPE:
             await answer_callback(callback, "المسودة غير موجودة.", alert=True)
             return
         analysis = await analyze_batch(session, batch, settings.timezone)
-    status = "📝 مسودة غير منشورة" if batch.status == "draft" else "✅ منشور"
     await safe_edit(
         callback,
         texts.admin_section_text(
             f"المسودة الذكية #{batch.id}",
-            "راجع الجدول والتحليل وعدّل أي يوم تريده. النشر لا يحدث إلا من زر الاعتماد وبعد شاشة تأكيد ثانية.",
+            "الجدول غير منشور. افحصه وعدله وصدّر Word، ثم استخدم الاعتماد فقط بعد أن تتأكد منه.",
             stats=[
-                f"📌 الحالة: {status}",
-                f"📅 الفترة: {_date_text(batch.period_start)} → {_date_text(batch.period_end)}" if batch.period_start and batch.period_end else "📅 الفترة غير محددة",
+                f"📌 الحالة: {'📝 غير منشور' if batch.status == 'draft' else '✅ منشور'}",
+                f"📅 الفترة: {_date_text(batch.period_start)} → {_date_text(batch.period_end)}",
                 f"⚖️ تقييم العدالة: {analysis.rating}",
                 f"📋 المناوبات: {analysis.total_assignments}",
-                f"🔁 أيام متتالية: {analysis.consecutive_assignments}",
+                f"🔁 يومان متتاليان: {analysis.consecutive_assignments}",
                 f"⛔ تعارضات صلبة: {analysis.hard_errors}",
-                *_explain(
-                    "👁️ عرض الجدول — يعرض كل الأيام صفحة صفحة قبل النشر.",
-                    "📊 تحليل الجدول — يعرض التوازن والتعارضات والجمعات بالتفصيل.",
-                    "✏️ تعديل الجدول — يفتح أي يوم لتغيير النهاري أو الليلي وتثبيته.",
-                    "🧠 إعادة التوزيع الذكي — يولد توزيعاً جديداً مع إبقاء الأيام المثبتة.",
-                    "📄 معاينة / تصدير Word — يرسل نفس تنسيق ملف Word الرسمي بالتواريخ الجديدة.",
-                    "✅ اعتماد ونشر — يفتح تأكيداً أخيراً؛ لا ينشر مباشرة.",
-                    "🗑️ حذف المسودة — يحذف المسودة فقط ولا يمس الجدول المنشور.",
+                *_help(
+                    "👁️ عرض الجدول — يعرض الأيام والنهاري والليلي قبل النشر.",
+                    "📊 تحليل الجدول — يعرض العدالة والتعارضات ونظام الجمعة.",
+                    "✏️ تعديل الجدول — يغير أي صيدلية ويثبت اختيارك اليدوي.",
+                    "🧠 إعادة التوزيع — يغير غير المثبت فقط.",
+                    "📄 Word — يرسل نفس شكل الجدول الرسمي بالتواريخ الجديدة.",
+                    "✅ اعتماد ونشر — يفتح شاشة تأكيد ثانية ولا ينشر مباشرة.",
+                    "🗑️ حذف المسودة — يلغي المسودة فقط.",
                 ),
             ],
-            warning="وجود تعارض صلب يمنع النشر حتى يتم إصلاحه.",
+            warning="النشر يتوقف تلقائياً إذا بقي تعارض صلب.",
         ),
         keyboards.keyboard(
             [
@@ -328,7 +306,7 @@ async def _render_draft(callback: CallbackQuery, db: Database, settings: Setting
                     keyboards.button("📊 تحليل الجدول", f"a:smart:analysis:{batch.id}", ButtonStyle.PRIMARY),
                 ],
                 [keyboards.button("✏️ تعديل الجدول", f"a:smart:edit:{batch.id}:0", ButtonStyle.PRIMARY)],
-                [keyboards.button("🧠 إعادة التوزيع الذكي", f"a:smart:rerollask:{batch.id}", ButtonStyle.PRIMARY)],
+                [keyboards.button("🧠 إعادة التوزيع", f"a:smart:rerollask:{batch.id}", ButtonStyle.PRIMARY)],
                 [keyboards.button("📄 معاينة / تصدير Word", f"a:smart:word:{batch.id}", ButtonStyle.PRIMARY)],
                 [keyboards.button("✅ اعتماد ونشر", f"a:smart:publishask:{batch.id}", ButtonStyle.SUCCESS)],
                 [keyboards.button("🗑️ حذف المسودة", f"a:smart:deleteask:{batch.id}", ButtonStyle.DANGER)],
@@ -341,6 +319,8 @@ async def _render_draft(callback: CallbackQuery, db: Database, settings: Setting
 
 @router.callback_query(F.data.startswith("a:smart:draft:"))
 async def smart_draft(callback: CallbackQuery, db: Database, settings: Settings) -> None:
+    if await require_admin(callback, db) is None:
+        return
     try:
         batch_id = int(callback.data.rsplit(":", 1)[1])
     except (ValueError, AttributeError):
@@ -364,31 +344,28 @@ async def smart_view(callback: CallbackQuery, db: Database, settings: Settings) 
     if batch is None:
         await answer_callback(callback, "المسودة غير موجودة.", alert=True)
         return
-    days = _batch_days(batch, settings.timezone)
-    pages = max(1, ceil(len(days) / PAGE_SIZE))
+    days = _days(batch, settings.timezone)
+    pages = max(1, ceil(len(days) / DAYS_PER_PAGE))
     page = min(page, pages - 1)
-    selected = days[page * PAGE_SIZE : (page + 1) * PAGE_SIZE]
-    lines = [f"👁️ <b>معاينة الجدول — صفحة {page + 1}/{pages}</b>", ""]
-    for duty_date, day_row, evening_row in selected:
-        lines.append(f"📅 <b>{_date_text(duty_date)}</b>{' 🕌' if duty_date.weekday() == 4 else ''}")
-        lines.append(f"☀️ {escape(_row_name(day_row)) if day_row else 'غير محدد'}")
-        lines.append(f"🌙 {escape(_row_name(evening_row)) if evening_row else 'غير محدد'}")
-        if any(bool((row.raw_data or {}).get("locked")) for row in (day_row, evening_row) if row):
-            lines.append("🔒 اليوم مثبت جزئياً أو كلياً")
-        lines.append("")
-    lines.extend(
-        [
-            "🔹 ◀️/▶️ — تنقل بين صفحات الجدول.",
-            "🔹 ✏️ تعديل هذه الصفحة — يفتح أيام هذه الصفحة للتعديل.",
-            "🔹 🔙 رجوع — يرجع للمسودة بدون تغيير.",
-        ]
-    )
+    lines = [f"👁️ <b>الجدول — صفحة {page + 1}/{pages}</b>", ""]
+    for duty_date, day_row, evening_row in days[page * DAYS_PER_PAGE : (page + 1) * DAYS_PER_PAGE]:
+        lines.extend(
+            [
+                f"📅 <b>{_date_text(duty_date)}</b>{' 🕌' if duty_date.weekday() == 4 else ''}",
+                f"☀️ {escape(_name(day_row))}",
+                f"🌙 {escape(_name(evening_row))}",
+                "",
+            ]
+        )
+    lines.extend(_help("◀️/▶️ — تنقل بين الصفحات.", "✏️ تعديل — يفتح أيام الصفحة للتعديل.", "🔙 رجوع — يرجع للمسودة."))
+    rows = []
     nav = []
-    if page > 0:
+    if page:
         nav.append(keyboards.button("◀️ السابق", f"a:smart:view:{batch_id}:{page - 1}"))
     if page + 1 < pages:
         nav.append(keyboards.button("التالي ▶️", f"a:smart:view:{batch_id}:{page + 1}"))
-    rows = [nav] if nav else []
+    if nav:
+        rows.append(nav)
     rows.extend(
         [
             [keyboards.button("✏️ تعديل هذه الصفحة", f"a:smart:edit:{batch_id}:{page}", ButtonStyle.PRIMARY)],
@@ -400,7 +377,7 @@ async def smart_view(callback: CallbackQuery, db: Database, settings: Settings) 
 
 
 @router.callback_query(F.data.startswith("a:smart:edit:"))
-async def smart_edit_list(callback: CallbackQuery, db: Database, settings: Settings) -> None:
+async def smart_edit(callback: CallbackQuery, db: Database, settings: Settings) -> None:
     if await require_writer(callback, db) is None:
         return
     try:
@@ -412,34 +389,28 @@ async def smart_edit_list(callback: CallbackQuery, db: Database, settings: Setti
     async with db.session_factory() as session:
         batch = await repositories.get_import_batch(session, batch_id)
     if batch is None or batch.status != "draft":
-        await answer_callback(callback, "هذه المسودة غير قابلة للتعديل.", alert=True)
+        await answer_callback(callback, "المسودة غير قابلة للتعديل.", alert=True)
         return
-    days = _batch_days(batch, settings.timezone)
-    pages = max(1, ceil(len(days) / PAGE_SIZE))
+    days = _days(batch, settings.timezone)
+    pages = max(1, ceil(len(days) / DAYS_PER_PAGE))
     page = min(page, pages - 1)
-    selected = days[page * PAGE_SIZE : (page + 1) * PAGE_SIZE]
     rows = []
-    for duty_date, _, _ in selected:
-        label = f"{'🕌 ' if duty_date.weekday() == 4 else '📅 '}{_date_text(duty_date)}"
-        rows.append([keyboards.button(label, f"a:smart:day:{batch_id}:{duty_date.strftime('%Y%m%d')}", ButtonStyle.PRIMARY)])
+    for duty_date, _, _ in days[page * DAYS_PER_PAGE : (page + 1) * DAYS_PER_PAGE]:
+        rows.append([keyboards.button(f"{'🕌' if duty_date.weekday() == 4 else '📅'} {_date_text(duty_date)}", f"a:smart:day:{batch_id}:{duty_date.strftime('%Y%m%d')}", ButtonStyle.PRIMARY)])
     nav = []
-    if page > 0:
+    if page:
         nav.append(keyboards.button("◀️ السابق", f"a:smart:edit:{batch_id}:{page - 1}"))
     if page + 1 < pages:
         nav.append(keyboards.button("التالي ▶️", f"a:smart:edit:{batch_id}:{page + 1}"))
     if nav:
         rows.append(nav)
-    rows.append([keyboards.button("⬅️ رجوع للمسودة", f"a:smart:draft:{batch_id}")])
+    rows.append([keyboards.button("⬅️ رجوع", f"a:smart:draft:{batch_id}")])
     await safe_edit(
         callback,
         texts.admin_section_text(
             "تعديل الجدول",
-            "اختر اليوم الذي تريد مراجعته. بعد تغيير أي صيدلية يعيد البوت التحليل تلقائياً ويثبت اختيارك اليدوي.",
-            stats=_explain(
-                "أزرار التواريخ — تفتح النهاري والليلي لذلك اليوم.",
-                "◀️/▶️ — تنقل بين بقية أيام الفترة.",
-                "🔙 رجوع — يرجع للمسودة بدون تعديل.",
-            ),
+            "اختر يوماً، ثم غير النهاري أو الليلي. أي اختيار يدوي يُثبت تلقائياً.",
+            stats=_help("زر التاريخ — يفتح ذلك اليوم.", "◀️/▶️ — تنقل بين الأيام.", "🔙 رجوع — يرجع للمسودة."),
         ),
         keyboards.keyboard(rows),
     )
@@ -450,28 +421,27 @@ async def _render_day(callback: CallbackQuery, db: Database, settings: Settings,
     async with db.session_factory() as session:
         batch = await repositories.get_import_batch(session, batch_id)
     if batch is None or batch.status != "draft":
-        await answer_callback(callback, "المسودة غير موجودة أو منشورة.", alert=True)
+        await answer_callback(callback, "المسودة غير موجودة.", alert=True)
         return
-    entries = {period: row for day, *pair in _batch_days(batch, settings.timezone) if day == duty_date for period, row in zip((DAY, EVENING), pair) if row}
-    day_row = entries.get(DAY)
-    evening_row = entries.get(EVENING)
-    if day_row is None or evening_row is None:
-        await answer_callback(callback, "بيانات هذا اليوم غير مكتملة.", alert=True)
+    entry = next(((day_row, evening_row) for day, day_row, evening_row in _days(batch, settings.timezone) if day == duty_date), None)
+    if not entry or not entry[0] or not entry[1]:
+        await answer_callback(callback, "بيانات اليوم غير مكتملة.", alert=True)
         return
-    locked = bool((day_row.raw_data or {}).get("locked")) and bool((evening_row.raw_data or {}).get("locked"))
+    day_row, evening_row = entry
+    locked = all(bool((row.raw_data or {}).get("locked")) for row in (day_row, evening_row))
     await safe_edit(
         callback,
         texts.admin_section_text(
             f"تعديل {_date_text(duty_date)}",
-            "يمكنك تغيير النهاري أو الليلي. البوت يمنع اختيار نفس الصيدلية للفترتين ويثبت التعديل اليدوي حتى لا تضيع تغييراتك عند إعادة التوزيع.",
+            "ممنوع نفس الصيدلية نهاري وليلي. التعديل اليدوي يبقى مثبتاً عند إعادة التوزيع.",
             stats=[
-                f"☀️ النهاري: {escape(_row_name(day_row))}",
-                f"🌙 الليلي: {escape(_row_name(evening_row))}",
-                f"🔒 تثبيت اليوم: {'مفعل' if locked else 'غير مفعل بالكامل'}",
-                *_explain(
-                    "✏️ تغيير النهاري — يعرض أنسب الصيدليات مع إحصائياتها.",
-                    "✏️ تغيير الليلي — يعرض أنسب الصيدليات مع إحصائياتها.",
-                    "🔒/🔓 تثبيت اليوم — يحافظ على اختيارات اليوم عند إعادة التوزيع الذكي.",
+                f"☀️ النهاري: {escape(_name(day_row))}",
+                f"🌙 الليلي: {escape(_name(evening_row))}",
+                f"🔒 تثبيت اليوم: {'نعم' if locked else 'لا'}",
+                *_help(
+                    "✏️ تغيير النهاري — يعرض الصيدليات مرتبة حسب الحاجة والتوازن.",
+                    "✏️ تغيير الليلي — يعرض الصيدليات مرتبة حسب الحاجة والتوازن.",
+                    "🔒/🔓 تثبيت — يحافظ على اليوم أو يسمح بإعادة توليده.",
                     "🔙 رجوع — يرجع لقائمة الأيام.",
                 ),
             ],
@@ -480,7 +450,7 @@ async def _render_day(callback: CallbackQuery, db: Database, settings: Settings,
             [
                 [keyboards.button("✏️ تغيير النهاري", f"a:smart:choose:{batch_id}:{day_row.id}:0", ButtonStyle.PRIMARY)],
                 [keyboards.button("✏️ تغيير الليلي", f"a:smart:choose:{batch_id}:{evening_row.id}:0", ButtonStyle.PRIMARY)],
-                [keyboards.button("🔓 إلغاء تثبيت اليوم" if locked else "🔒 تثبيت اليوم", f"a:smart:lock:{batch_id}:{duty_date.strftime('%Y%m%d')}", ButtonStyle.SUCCESS if not locked else ButtonStyle.PRIMARY)],
+                [keyboards.button("🔓 إلغاء تثبيت اليوم" if locked else "🔒 تثبيت اليوم", f"a:smart:lock:{batch_id}:{duty_date.strftime('%Y%m%d')}", ButtonStyle.PRIMARY)],
                 [keyboards.button("⬅️ رجوع", f"a:smart:edit:{batch_id}:0")],
             ]
         ),
@@ -493,9 +463,9 @@ async def smart_day(callback: CallbackQuery, db: Database, settings: Settings) -
     if await require_writer(callback, db) is None:
         return
     try:
-        _, _, _, batch_raw, date_raw = callback.data.split(":", 4)
+        _, _, _, batch_raw, raw = callback.data.split(":", 4)
         batch_id = int(batch_raw)
-        duty_date = date(int(date_raw[:4]), int(date_raw[4:6]), int(date_raw[6:8]))
+        duty_date = date(int(raw[:4]), int(raw[4:6]), int(raw[6:8]))
     except (ValueError, AttributeError):
         await answer_callback(callback, "اليوم غير صالح.", alert=True)
         return
@@ -503,13 +473,13 @@ async def smart_day(callback: CallbackQuery, db: Database, settings: Settings) -
 
 
 @router.callback_query(F.data.startswith("a:smart:lock:"))
-async def smart_lock_day(callback: CallbackQuery, db: Database, settings: Settings) -> None:
+async def smart_lock(callback: CallbackQuery, db: Database, settings: Settings) -> None:
     if await require_writer(callback, db) is None:
         return
     try:
-        _, _, _, batch_raw, date_raw = callback.data.split(":", 4)
+        _, _, _, batch_raw, raw = callback.data.split(":", 4)
         batch_id = int(batch_raw)
-        duty_date = date(int(date_raw[:4]), int(date_raw[4:6]), int(date_raw[6:8]))
+        duty_date = date(int(raw[:4]), int(raw[4:6]), int(raw[6:8]))
     except (ValueError, AttributeError):
         await answer_callback(callback, "اليوم غير صالح.", alert=True)
         return
@@ -518,11 +488,11 @@ async def smart_lock_day(callback: CallbackQuery, db: Database, settings: Settin
         if batch is None or batch.status != "draft":
             await answer_callback(callback, "المسودة غير قابلة للتعديل.", alert=True)
             return
-        rows = [row for day, day_row, evening_row in _batch_days(batch, settings.timezone) if day == duty_date for row in (day_row, evening_row) if row]
-        make_locked = not all(bool((row.raw_data or {}).get("locked")) for row in rows)
-        for row in rows:
+        day_rows = [row for day, d, e in _days(batch, settings.timezone) if day == duty_date for row in (d, e) if row]
+        new_value = not all(bool((row.raw_data or {}).get("locked")) for row in day_rows)
+        for row in day_rows:
             data = dict(row.raw_data or {})
-            data["locked"] = make_locked
+            data["locked"] = new_value
             row.raw_data = data
         await session.commit()
     await answer_callback(callback, "تم تحديث تثبيت اليوم.")
@@ -530,7 +500,7 @@ async def smart_lock_day(callback: CallbackQuery, db: Database, settings: Settin
 
 
 @router.callback_query(F.data.startswith("a:smart:choose:"))
-async def smart_choose_list(callback: CallbackQuery, db: Database, settings: Settings) -> None:
+async def smart_choose(callback: CallbackQuery, db: Database, settings: Settings) -> None:
     if await require_writer(callback, db) is None:
         return
     try:
@@ -542,43 +512,33 @@ async def smart_choose_list(callback: CallbackQuery, db: Database, settings: Set
     async with db.session_factory() as session:
         batch = await repositories.get_import_batch(session, batch_id)
         target = next((row for row in batch.rows if row.id == row_id), None) if batch else None
-        if batch is None or target is None or target.start_at is None:
+        if target is None or target.start_at is None:
             await answer_callback(callback, "المناوبة غير موجودة.", alert=True)
             return
-        stats, _ = await pharmacy_year_statistics(
-            session,
-            year=as_local(target.start_at, settings.timezone).year,
-            timezone=settings.timezone,
-        )
-    period = _row_period(target, settings.timezone)
-    stats.sort(key=lambda item: (item["total"], item[period], item["fridays"], item["name"]))
-    pages = max(1, ceil(len(stats) / STATS_PAGE_SIZE))
+        items, _ = await pharmacy_year_statistics(session, year=as_local(target.start_at, settings.timezone).year, timezone=settings.timezone)
+    slot = _period(target, settings.timezone)
+    items.sort(key=lambda item: (item["total"], item[slot], item["fridays"], item["name"]))
+    pages = max(1, ceil(len(items) / STATS_PER_PAGE))
     page = min(page, pages - 1)
-    selected = stats[page * STATS_PAGE_SIZE : (page + 1) * STATS_PAGE_SIZE]
     rows = []
-    for item in selected:
-        icon = "☀️" if period == DAY else "🌙"
-        label = f"{item['name']} • إج {item['total']} • {icon}{item[period]} • 🕌{item['fridays']}/2"
-        rows.append([keyboards.button(label, f"a:smart:pick:{batch_id}:{row_id}:{item['id']}")])
+    for item in items[page * STATS_PER_PAGE : (page + 1) * STATS_PER_PAGE]:
+        icon = "☀️" if slot == DAY else "🌙"
+        rows.append([keyboards.button(f"{item['name']} • إج{item['total']} • {icon}{item[slot]} • 🕌{item['fridays']}/2", f"a:smart:pick:{batch_id}:{row_id}:{item['id']}")])
     nav = []
-    if page > 0:
+    if page:
         nav.append(keyboards.button("◀️ السابق", f"a:smart:choose:{batch_id}:{row_id}:{page - 1}"))
     if page + 1 < pages:
         nav.append(keyboards.button("التالي ▶️", f"a:smart:choose:{batch_id}:{row_id}:{page + 1}"))
     if nav:
         rows.append(nav)
     duty_date = as_local(target.start_at, settings.timezone).date()
-    rows.append([keyboards.button("⬅️ رجوع لليوم", f"a:smart:day:{batch_id}:{duty_date.strftime('%Y%m%d')}")])
+    rows.append([keyboards.button("⬅️ رجوع", f"a:smart:day:{batch_id}:{duty_date.strftime('%Y%m%d')}")])
     await safe_edit(
         callback,
         texts.admin_section_text(
             "اختيار صيدلية بديلة",
-            "القائمة مرتبة بحيث تظهر الصيدليات الأقل مناوبات والأكثر حاجة لهذه الفترة أولاً. اختيارك اليدوي يبقى مثبتاً.",
-            stats=_explain(
-                "زر كل صيدلية — يعرض اسمها ثم إجمالي مناوباتها وعدد هذه الفترة وعدد جمعاتها.",
-                "◀️/▶️ — يعرض بقية الصيدليات.",
-                "🔙 رجوع — يلغي الخروج من القائمة بدون تغيير.",
-            ),
+            "الأسماء مرتبة بالأقل مناوبات ثم الأقل في نوع المناوبة، مع إظهار رصيد الجمعة.",
+            stats=_help("زر الصيدلية — يحفظها ويثبت التعديل.", "◀️/▶️ — يعرض بقية الصيدليات.", "🔙 رجوع — بدون تغيير."),
         ),
         keyboards.keyboard(rows),
     )
@@ -600,12 +560,12 @@ async def smart_pick(callback: CallbackQuery, db: Database, settings: Settings) 
         target = next((row for row in batch.rows if row.id == row_id), None) if batch else None
         pharmacy = await repositories.get_pharmacy(session, pharmacy_id)
         if batch is None or batch.status != "draft" or target is None or target.start_at is None or pharmacy is None or pharmacy.status != "active":
-            await answer_callback(callback, "تعذر حفظ هذا الاختيار.", alert=True)
+            await answer_callback(callback, "تعذر حفظ الاختيار.", alert=True)
             return
         duty_date = as_local(target.start_at, settings.timezone).date()
-        same_day_rows = [row for day, day_row, evening_row in _batch_days(batch, settings.timezone) if day == duty_date for row in (day_row, evening_row) if row and row.id != target.id]
-        if any(row.matched_pharmacy_id == pharmacy_id for row in same_day_rows):
-            await answer_callback(callback, "ممنوع اختيار نفس الصيدلية للنهاري والليلي بنفس اليوم.", alert=True)
+        paired = [row for day, d, e in _days(batch, settings.timezone) if day == duty_date for row in (d, e) if row and row.id != target.id]
+        if any(row.matched_pharmacy_id == pharmacy_id for row in paired):
+            await answer_callback(callback, "ممنوع نفس الصيدلية نهاري وليلي بنفس اليوم.", alert=True)
             return
         target.matched_pharmacy_id = pharmacy.id
         target.raw_pharmacy_name = pharmacy.name
@@ -613,13 +573,12 @@ async def smart_pick(callback: CallbackQuery, db: Database, settings: Settings) 
         target.errors = []
         target.status = "ready"
         data = dict(target.raw_data or {})
-        data["locked"] = True
-        data["manual_override"] = True
+        data.update({"locked": True, "manual_override": True})
         target.raw_data = data
         batch.summary = repositories.summarize_import_rows(batch.rows)
         await session.commit()
         analysis = await analyze_batch(session, batch, settings.timezone)
-    await answer_callback(callback, f"تم التعديل. تقييم الجدول الآن: {analysis.rating}")
+    await answer_callback(callback, f"تم التعديل. تقييم الجدول: {analysis.rating}")
     await _render_day(callback, db, settings, batch_id, duty_date)
 
 
@@ -641,31 +600,26 @@ async def smart_analysis(callback: CallbackQuery, db: Database, settings: Settin
     await safe_edit(
         callback,
         texts.admin_section_text(
-            "تحليل الجدول الذكي",
-            "هذا الفحص يعاد حسابه من بيانات المسودة الحالية، لذلك أي تعديل يدوي يظهر أثره هنا مباشرة.",
+            "تحليل الجدول",
+            "الفحص يعاد حسابه من المسودة الحالية بعد كل تعديل.",
             stats=[
                 f"⚖️ التقييم: {analysis.rating}",
-                f"📋 إجمالي مناوبات المسودة: {analysis.total_assignments}",
-                f"📏 فرق إجمالي المناوبات بين الأقل والأكثر: {analysis.total_spread}",
+                f"📏 فرق الإجمالي: {analysis.total_spread}",
                 f"☀️ فرق النهاري: {analysis.day_spread}",
                 f"🌙 فرق الليلي: {analysis.evening_spread}",
-                f"🔁 مناوبات في يومين متتاليين: {analysis.consecutive_assignments}",
-                f"⛔ نفس الصيدلية بفترتين في اليوم: {analysis.same_day_conflicts}",
-                f"🕌 خانات الجمعة في المسودة: {analysis.friday_assignments}",
-                f"🕌 تجاوز حد 2/2: {analysis.friday_over_limit}",
-                f"🎯 مخالفات أولوية 0/2 ثم 1/2: {analysis.friday_priority_violations}",
-                *_explain(
-                    "🏥 إحصائيات الصيدليات — يفتح الصورة الكاملة للسنة لكل الصيدليات.",
-                    "✏️ تعديل الجدول — يصلح أي تنبيه قبل النشر.",
-                    "🔙 رجوع — يرجع للمسودة.",
-                ),
+                f"🔁 يومان متتاليان: {analysis.consecutive_assignments}",
+                f"⛔ نفس الصيدلية في اليوم: {analysis.same_day_conflicts}",
+                f"🕌 خانات الجمعة: {analysis.friday_assignments}",
+                f"🕌 تجاوز 2/2: {analysis.friday_over_limit}",
+                f"🎯 مخالفة أولوية 0/2 ثم 1/2: {analysis.friday_priority_violations}",
+                *_help("✏️ تعديل — يصلح أي تنبيه.", "🏥 الإحصائيات — يفتح كل الصيدليات.", "🔙 رجوع — يرجع للمسودة."),
             ],
-            warning="التعارض بنفس اليوم أو تجاوز حد الجمعات يمنع النشر. الأيام المتتالية تنبيه يحاول البوت تجنبه قدر الإمكان.",
+            warning="التعارض بنفس اليوم أو تجاوز جمعتي السنة يمنع النشر.",
         ),
         keyboards.keyboard(
             [
-                [keyboards.button("🏥 إحصائيات الصيدليات", "a:smart:stats", ButtonStyle.PRIMARY)],
                 [keyboards.button("✏️ تعديل الجدول", f"a:smart:edit:{batch_id}:0", ButtonStyle.PRIMARY)],
+                [keyboards.button("🏥 إحصائيات الصيدليات", "a:smart:stats", ButtonStyle.PRIMARY)],
                 [keyboards.button("⬅️ رجوع", f"a:smart:draft:{batch_id}")],
             ]
         ),
@@ -681,13 +635,9 @@ async def smart_reroll_ask(callback: CallbackQuery, db: Database) -> None:
     await safe_edit(
         callback,
         texts.admin_section_text(
-            "إعادة التوزيع الذكي",
-            "سيعيد البوت توليد كل المناوبات غير المثبتة ويترك الأيام التي ثبتها الأدمن كما هي.",
-            stats=_explain(
-                "🧠 تأكيد إعادة التوزيع — ينشئ توزيعاً جديداً داخل نفس المسودة، ولا ينشره.",
-                "❌ إلغاء — يرجع للمسودة الحالية بدون تغيير.",
-            ),
-            warning="المناوبات غير المثبتة قد تتغير كلها.",
+            "إعادة التوزيع",
+            "سيعاد توليد غير المثبت فقط. الأيام والتعديلات المثبتة تبقى كما هي.",
+            stats=_help("🧠 تأكيد — يعيد التوليد داخل المسودة فقط.", "❌ إلغاء — يرجع بدون تغيير."),
         ),
         keyboards.keyboard(
             [
@@ -710,14 +660,13 @@ async def smart_reroll(callback: CallbackQuery, db: Database, settings: Settings
             await answer_callback(callback, "المسودة غير قابلة لإعادة التوزيع.", alert=True)
             return
         fixed = fixed_from_batch(batch, settings.timezone)
-        times = await get_shift_times(session)
         try:
             prepared, analysis = await generate_import_rows(
                 session,
                 start_date=batch.period_start,
                 end_date=batch.period_end,
                 timezone=settings.timezone,
-                times=times,
+                times=await get_shift_times(session),
                 fixed=fixed,
             )
         except ValueError as exc:
@@ -740,7 +689,7 @@ async def smart_reroll(callback: CallbackQuery, db: Database, settings: Settings
             )
         batch.summary = {**repositories.summarize_import_rows(batch.rows), "smart_analysis": analysis.as_dict()}
         await session.commit()
-    await answer_callback(callback, "تمت إعادة التوزيع مع الحفاظ على الأيام المثبتة.")
+    await answer_callback(callback, "تمت إعادة التوزيع مع الحفاظ على المثبت.")
     await _render_draft(callback, db, settings, batch_id)
 
 
@@ -761,11 +710,10 @@ async def smart_word(callback: CallbackQuery, db: Database, settings: Settings) 
     except WordExportError as exc:
         await answer_callback(callback, str(exc), alert=True)
         return
-    filename = f"amuda_schedule_{batch.period_start}_{batch.period_end}.docx"
     if callback.message:
         await callback.message.answer_document(
-            BufferedInputFile(content, filename=filename),
-            caption="📄 نسخة Word بنفس تنسيق الجدول الرسمي. راجعها قبل الاعتماد والنشر.",
+            BufferedInputFile(content, filename=f"amuda_schedule_{batch.period_start}_{batch.period_end}.docx"),
+            caption="📄 نفس تنسيق Word الرسمي. راجعه قبل الاعتماد والنشر.",
         )
     await answer_callback(callback, "تم إنشاء ملف Word.")
 
@@ -783,22 +731,17 @@ async def smart_publish_ask(callback: CallbackQuery, db: Database, settings: Set
         analysis = await analyze_batch(session, batch, settings.timezone)
     if analysis.hard_errors:
         await answer_callback(callback, "يوجد تعارض صلب. افتح التحليل وعدّل الجدول أولاً.", alert=True)
-        await smart_analysis(callback, db, settings)
         return
     await safe_edit(
         callback,
         texts.admin_section_text(
-            "تأكيد اعتماد ونشر الجدول",
-            "هذه هي آخر خطوة. الجدول ما زال مسودة حتى تضغط زر التأكيد الأخضر أدناه.",
+            "تأكيد اعتماد ونشر",
+            "هذه آخر خطوة. الجدول ما زال مسودة ولن ينشر حتى تضغط التأكيد الأخضر.",
             stats=[
-                f"📅 الفترة: {_date_text(batch.period_start)} → {_date_text(batch.period_end)}" if batch.period_start and batch.period_end else "",
-                f"⚖️ تقييم العدالة: {analysis.rating}",
-                f"🔁 أيام متتالية: {analysis.consecutive_assignments}",
-                f"⛔ تعارضات صلبة: {analysis.hard_errors}",
-                *_explain(
-                    "✅ نعم، اعتماد ونشر — يحول المسودة إلى الجدول الرسمي الذي يراه المستخدمون.",
-                    "👁️ رجوع للمراجعة — يرجع للمسودة لتشاهدها أو تعدلها مرة أخرى.",
-                ),
+                f"📅 {_date_text(batch.period_start)} → {_date_text(batch.period_end)}",
+                f"⚖️ التقييم: {analysis.rating}",
+                f"🔁 يومان متتاليان: {analysis.consecutive_assignments}",
+                *_help("✅ نعم، اعتماد ونشر — يجعل الجدول رسمياً للمستخدمين.", "👁️ رجوع للمراجعة — يرجع بدون نشر."),
             ],
         ),
         keyboards.keyboard(
@@ -823,7 +766,7 @@ async def smart_publish(callback: CallbackQuery, db: Database, settings: Setting
             return
         analysis = await analyze_batch(session, batch, settings.timezone)
         if analysis.hard_errors:
-            await answer_callback(callback, "تم إيقاف النشر لأن الفحص الأخير وجد تعارضاً صلباً.", alert=True)
+            await answer_callback(callback, "أوقف النشر لأن الفحص الأخير وجد تعارضاً.", alert=True)
             return
         inserted, removed = await repositories.publish_import_batch(
             session,
@@ -835,20 +778,13 @@ async def smart_publish(callback: CallbackQuery, db: Database, settings: Setting
         callback,
         texts.admin_section_text(
             "تم اعتماد الجدول",
-            "أصبح الجدول منشوراً للمستخدمين بعد المراجعة والتأكيد النهائي.",
-            stats=[
-                f"✅ مناوبات منشورة: {inserted}",
-                f"🗑️ مناوبات مستبدلة: {removed}",
-                *_explain(
-                    "📄 تصدير Word — ينزل نسخة الجدول الرسمي بعد النشر.",
-                    "🧠 العودة للقسم الذكي — يرجع للصفحة الرئيسية للقسم.",
-                ),
-            ],
+            "أصبح الجدول منشوراً بعد المراجعة والتأكيد النهائي.",
+            stats=[f"✅ مناوبات منشورة: {inserted}", f"🗑️ مستبدلة: {removed}", *_help("📄 Word — ينزل النسخة الرسمية.", "🧠 رجوع — يرجع للقسم الذكي.")],
         ),
         keyboards.keyboard(
             [
                 [keyboards.button("📄 تصدير Word", f"a:smart:word:{batch_id}", ButtonStyle.PRIMARY)],
-                [keyboards.button("🧠 العودة للقسم الذكي", SMART_HOME, ButtonStyle.PRIMARY)],
+                [keyboards.button("🧠 رجوع للقسم", SMART_HOME, ButtonStyle.PRIMARY)],
             ]
         ),
     )
@@ -863,12 +799,9 @@ async def smart_delete_ask(callback: CallbackQuery, db: Database) -> None:
     await safe_edit(
         callback,
         texts.admin_section_text(
-            "حذف المسودة الذكية",
-            "الحذف هنا يخص المسودة غير المنشورة فقط، ولا يحذف أي جدول رسمي منشور.",
-            stats=_explain(
-                "🗑️ تأكيد حذف المسودة — يلغي هذه المسودة نهائياً.",
-                "❌ إلغاء — يرجع للمسودة بدون حذف.",
-            ),
+            "حذف المسودة",
+            "يحذف المسودة غير المنشورة فقط ولا يمس أي جدول رسمي.",
+            stats=_help("🗑️ تأكيد — يلغي المسودة.", "❌ إلغاء — يرجع بدون حذف."),
         ),
         keyboards.keyboard(
             [
@@ -888,7 +821,7 @@ async def smart_delete(callback: CallbackQuery, db: Database, settings: Settings
     async with db.session_factory() as session:
         deleted = await repositories.cancel_import_batch(session, batch_id, callback.from_user.id)
     await answer_callback(callback, "تم حذف المسودة." if deleted else "المسودة غير موجودة.")
-    await _render_smart_home(callback, db, settings)
+    await _render_home(callback, db, settings)
 
 
 @router.callback_query(F.data == "a:smart:stats")
@@ -897,28 +830,26 @@ async def smart_stats(callback: CallbackQuery, db: Database, settings: Settings)
         return
     year = as_local(utcnow(), settings.timezone).year
     async with db.session_factory() as session:
-        rows, summary = await pharmacy_year_statistics(session, year=year, timezone=settings.timezone)
-    zero = sum(1 for item in rows if item["fridays"] == 0)
-    one = sum(1 for item in rows if item["fridays"] == 1)
-    two = sum(1 for item in rows if item["fridays"] >= 2)
+        items, summary = await pharmacy_year_statistics(session, year=year, timezone=settings.timezone)
+    zero = sum(1 for item in items if item["fridays"] == 0)
+    one = sum(1 for item in items if item["fridays"] == 1)
+    two = sum(1 for item in items if item["fridays"] >= 2)
     await safe_edit(
         callback,
         texts.admin_section_text(
             f"إحصائيات الصيدليات — {year}",
-            "هذه الإحصائيات تشمل كل المناوبات المسجلة في قاعدة البوت، وليست خاصة بالجمعات فقط.",
+            "تشمل كل المناوبات المسجلة، وليست خاصة بالجمعات فقط.",
             stats=[
-                f"🏥 الصيدليات الفعالة: {summary['pharmacies']}",
+                f"🏥 الصيدليات: {summary['pharmacies']}",
                 f"📋 إجمالي المناوبات: {summary['total']}",
-                f"☀️ النهارية: {summary['day']}",
-                f"🌙 الليلية: {summary['evening']}",
-                f"🕌 بدون جمعة 0/2: {zero} | جمعة 1/2: {one} | مكتملة 2/2: {two}",
-                f"⚖️ متوسط المناوبات: {summary['average']:.1f}",
-                f"📏 الفرق بين الأقل والأكثر: {summary['spread']}",
-                *_explain(
-                    "🏥 كل الصيدليات — يعرض لكل صيدلية الإجمالي والنهاري والليلي والجمعات وآخر مناوبة.",
-                    "⚖️ عدالة التوزيع — يقارن الأقل والأكثر والمتوسط والفروقات.",
-                    "🕌 إحصائية الجمعات — يقسم الصيدليات إلى 0/2 و1/2 و2/2.",
-                    "📅 حسب الشهر — يعرض حجم المناوبات في كل شهر.",
+                f"☀️ النهاري: {summary['day']} | 🌙 الليلي: {summary['evening']}",
+                f"🕌 0/2: {zero} | 1/2: {one} | 2/2: {two}",
+                f"⚖️ المتوسط: {summary['average']:.1f} | الفرق: {summary['spread']}",
+                *_help(
+                    "🏥 كل الصيدليات — يعرض أرقام كل صيدلية وتفاصيلها.",
+                    "⚖️ عدالة التوزيع — يقارن الأقل والأكثر والمتوسط.",
+                    "🕌 الجمعات — يقسم 0/2 و1/2 و2/2.",
+                    "📅 حسب الشهر — يعرض إجمالي كل شهر.",
                     "🔙 رجوع — يرجع للقسم الذكي.",
                 ),
             ],
@@ -944,29 +875,17 @@ async def smart_stats_list(callback: CallbackQuery, db: Database, settings: Sett
     year = as_local(utcnow(), settings.timezone).year
     async with db.session_factory() as session:
         items, _ = await pharmacy_year_statistics(session, year=year, timezone=settings.timezone)
-    pages = max(1, ceil(len(items) / STATS_PAGE_SIZE))
+    pages = max(1, ceil(len(items) / STATS_PER_PAGE))
     page = min(page, pages - 1)
-    selected = items[page * STATS_PAGE_SIZE : (page + 1) * STATS_PAGE_SIZE]
+    chosen = items[page * STATS_PER_PAGE : (page + 1) * STATS_PER_PAGE]
     lines = [f"🏥 <b>كل الصيدليات — {year}</b>", f"صفحة {page + 1}/{pages}", ""]
     rows = []
-    for item in selected:
-        lines.extend(
-            [
-                f"💊 <b>{escape(item['name'])}</b>",
-                f"📋 {item['total']} | ☀️ {item['day']} | 🌙 {item['evening']} | 🕌 {item['fridays']}/2",
-                "",
-            ]
-        )
+    for item in chosen:
+        lines.extend([f"💊 <b>{escape(item['name'])}</b>", f"📋 {item['total']} | ☀️ {item['day']} | 🌙 {item['evening']} | 🕌 {item['fridays']}/2", ""])
         rows.append([keyboards.button(f"📊 {item['name']}", f"a:smart:stats:p:{item['id']}", ButtonStyle.PRIMARY)])
-    lines.extend(
-        [
-            "🔹 زر اسم الصيدلية — يفتح إحصائياتها الكاملة وسجل مناوباتها.",
-            "🔹 ◀️/▶️ — تنقل بين بقية الصيدليات.",
-            "🔹 🔙 رجوع — يرجع للإحصائيات العامة.",
-        ]
-    )
+    lines.extend(_help("زر الصيدلية — يفتح تفاصيلها وسجلها.", "◀️/▶️ — تنقل بين الأسماء.", "🔙 رجوع — يرجع للإحصائيات."))
     nav = []
-    if page > 0:
+    if page:
         nav.append(keyboards.button("◀️ السابق", f"a:smart:stats:list:{page - 1}"))
     if page + 1 < pages:
         nav.append(keyboards.button("التالي ▶️", f"a:smart:stats:list:{page + 1}"))
@@ -989,32 +908,23 @@ async def smart_stats_pharmacy(callback: CallbackQuery, db: Database, settings: 
     if item is None:
         await answer_callback(callback, "الصيدلية غير موجودة.", alert=True)
         return
-    last_text = "لا توجد"
-    if item["last"]:
-        last_text = format_date_ar(item["last"].start_at, settings.timezone)
-    next_text = "لا توجد"
-    if item["next"]:
-        next_text = format_date_ar(item["next"].start_at, settings.timezone)
-    difference = item["total"] - summary["average"]
-    balance = "متوازنة ✅" if abs(difference) <= 1 else ("أعلى من المتوسط ⚠️" if difference > 0 else "أقل من المتوسط ⚠️")
+    last_text = _date_text(as_local(item["last"].start_at, settings.timezone).date()) if item["last"] else "لا توجد"
+    next_text = _date_text(as_local(item["next"].start_at, settings.timezone).date()) if item["next"] else "لا توجد"
+    delta = item["total"] - summary["average"]
+    balance = "متوازنة ✅" if abs(delta) <= 1 else ("أعلى من المتوسط ⚠️" if delta > 0 else "أقل من المتوسط ⚠️")
     await safe_edit(
         callback,
         texts.admin_section_text(
             item["name"],
-            f"إحصائية الصيدلية الكاملة لسنة {year} من جميع الجداول المنشورة.",
+            f"إحصائية كاملة لسنة {year}.",
             stats=[
-                f"📋 إجمالي المناوبات: {item['total']}",
-                f"☀️ نهاري: {item['day']}",
-                f"🌙 ليلي: {item['evening']}",
+                f"📋 الإجمالي: {item['total']}",
+                f"☀️ نهاري: {item['day']} | 🌙 ليلي: {item['evening']}",
                 f"🕌 جمعات: {item['fridays']}/2",
                 f"📅 آخر مناوبة: {last_text}",
                 f"⏭️ المناوبة القادمة: {next_text}",
                 f"⚖️ مقارنة بالمتوسط: {balance}",
-                *_explain(
-                    "📋 سجل المناوبات — يعرض تواريخ كل مناوبات هذه الصيدلية في السنة.",
-                    "🕌 تواريخ الجمعات — يعرض الجمعات التي أخذتها الصيدلية.",
-                    "🔙 رجوع — يرجع لقائمة الصيدليات.",
-                ),
+                *_help("📋 سجل المناوبات — يعرض كل تواريخها في السنة.", "🕌 تواريخ الجمعات — يعرض الجمعات المسجلة.", "🔙 رجوع — يرجع للقائمة."),
             ],
         ),
         keyboards.keyboard(
@@ -1041,30 +951,21 @@ async def smart_stats_history(callback: CallbackQuery, db: Database, settings: S
     year = as_local(utcnow(), settings.timezone).year
     async with db.session_factory() as session:
         pharmacy = await repositories.get_pharmacy(session, pharmacy_id)
-        shifts = list(
-            await session.scalars(
-                select(Shift)
-                .where(Shift.pharmacy_id == pharmacy_id, Shift.active.is_(True))
-                .order_by(Shift.start_at)
-            )
-        )
+        shifts = list(await session.scalars(select(Shift).where(Shift.pharmacy_id == pharmacy_id, Shift.active.is_(True)).order_by(Shift.start_at)))
     if pharmacy is None:
         await answer_callback(callback, "الصيدلية غير موجودة.", alert=True)
         return
     shifts = [shift for shift in shifts if as_local(shift.start_at, settings.timezone).year == year]
     pages = max(1, ceil(len(shifts) / 12))
     page = min(page, pages - 1)
-    selected = shifts[page * 12 : (page + 1) * 12]
     lines = [f"📋 <b>سجل {escape(pharmacy.name)} — {year}</b>", f"صفحة {page + 1}/{pages}", ""]
-    for shift in selected:
+    for shift in shifts[page * 12 : (page + 1) * 12]:
         local = as_local(shift.start_at, settings.timezone)
-        period = "☀️ نهاري" if local.hour < 18 else "🌙 ليلي"
-        friday = " 🕌" if local.weekday() == 4 else ""
-        lines.append(f"• {_date_text(local.date())} — {period}{friday}")
-    lines.extend(["", "🔹 ◀️/▶️ — تنقل في السجل.", "🔹 🔙 رجوع — يرجع لإحصائية الصيدلية."])
+        lines.append(f"• {_date_text(local.date())} — {'☀️ نهاري' if local.hour < 18 else '🌙 ليلي'}{' 🕌' if local.weekday() == 4 else ''}")
+    lines.extend(["", *_help("◀️/▶️ — تنقل بالسجل.", "🔙 رجوع — يرجع للصيدلية.")])
     rows = []
     nav = []
-    if page > 0:
+    if page:
         nav.append(keyboards.button("◀️ السابق", f"a:smart:stats:h:{pharmacy_id}:{page - 1}"))
     if page + 1 < pages:
         nav.append(keyboards.button("التالي ▶️", f"a:smart:stats:h:{pharmacy_id}:{page + 1}"))
@@ -1076,7 +977,7 @@ async def smart_stats_history(callback: CallbackQuery, db: Database, settings: S
 
 
 @router.callback_query(F.data.startswith("a:smart:stats:pf:"))
-async def smart_stats_pharmacy_fridays(callback: CallbackQuery, db: Database, settings: Settings) -> None:
+async def smart_stats_friday_dates(callback: CallbackQuery, db: Database, settings: Settings) -> None:
     if await require_admin(callback, db) is None:
         return
     pharmacy_id = int(callback.data.rsplit(":", 1)[1])
@@ -1087,13 +988,13 @@ async def smart_stats_pharmacy_fridays(callback: CallbackQuery, db: Database, se
     if item is None:
         await answer_callback(callback, "الصيدلية غير موجودة.", alert=True)
         return
-    friday_lines = [f"🕌 {_date_text(value)}" for value in item["friday_dates"]] or ["⚪ لم تأخذ جمعة مسجلة بعد."]
+    dates = [f"🕌 {_date_text(value)}" for value in item["friday_dates"]] or ["⚪ لا توجد جمعة مسجلة."]
     await safe_edit(
         callback,
         texts.admin_section_text(
             f"جمعات {item['name']}",
-            "تعرض التواريخ المسجلة في قاعدة البوت لهذه السنة.",
-            stats=[f"🕌 الرصيد: {item['fridays']}/2", *friday_lines, *_explain("🔙 رجوع — يرجع لإحصائية الصيدلية.")],
+            "هذه التواريخ محسوبة من المناوبات المسجلة في قاعدة البوت.",
+            stats=[f"🕌 الرصيد: {item['fridays']}/2", *dates, *_help("🔙 رجوع — يرجع لإحصائية الصيدلية.")],
         ),
         keyboards.simple_back(f"a:smart:stats:p:{pharmacy_id}"),
     )
@@ -1101,36 +1002,28 @@ async def smart_stats_pharmacy_fridays(callback: CallbackQuery, db: Database, se
 
 
 @router.callback_query(F.data == "a:smart:stats:fair")
-async def smart_stats_fairness(callback: CallbackQuery, db: Database, settings: Settings) -> None:
+async def smart_stats_fair(callback: CallbackQuery, db: Database, settings: Settings) -> None:
     if await require_admin(callback, db) is None:
         return
     year = as_local(utcnow(), settings.timezone).year
     async with db.session_factory() as session:
         items, summary = await pharmacy_year_statistics(session, year=year, timezone=settings.timezone)
-    least = [item["name"] for item in items if item["total"] == summary["min_total"]][:8]
-    most = [item["name"] for item in items if item["total"] == summary["max_total"]][:8]
+    least = [item["name"] for item in items if item["total"] == summary["min_total"]][:6]
+    most = [item["name"] for item in items if item["total"] == summary["max_total"]][:6]
     await safe_edit(
         callback,
         texts.admin_section_text(
-            "عدالة توزيع المناوبات",
-            "يقارن البوت إجمالي المناوبات بين جميع الصيدليات، ويستخدم هذه الأرقام عند إنشاء الجدول الجديد.",
+            "عدالة التوزيع",
+            "هذه الأرقام تدخل مباشرة في قرار المولّد الذكي عند إنشاء الجدول الجديد.",
             stats=[
-                f"📉 أقل عدد: {summary['min_total']} — {', '.join(least) if least else '-'}",
-                f"📈 أعلى عدد: {summary['max_total']} — {', '.join(most) if most else '-'}",
+                f"📉 الأقل: {summary['min_total']} — {', '.join(least) or '-'}",
+                f"📈 الأكثر: {summary['max_total']} — {', '.join(most) or '-'}",
                 f"⚖️ المتوسط: {summary['average']:.1f}",
                 f"📏 الفرق: {summary['spread']}",
-                *_explain(
-                    "🏥 كل الصيدليات — يعرض أرقام كل صيدلية بالتفصيل.",
-                    "🔙 رجوع — يرجع للإحصائيات.",
-                ),
+                *_help("🏥 كل الصيدليات — يفتح التفاصيل.", "🔙 رجوع — يرجع للإحصائيات."),
             ],
         ),
-        keyboards.keyboard(
-            [
-                [keyboards.button("🏥 كل الصيدليات", "a:smart:stats:list:0", ButtonStyle.PRIMARY)],
-                [keyboards.button("⬅️ رجوع", "a:smart:stats")],
-            ]
-        ),
+        keyboards.keyboard([[keyboards.button("🏥 كل الصيدليات", "a:smart:stats:list:0", ButtonStyle.PRIMARY)], [keyboards.button("⬅️ رجوع", "a:smart:stats")]]),
     )
     await answer_callback(callback)
 
@@ -1146,18 +1039,13 @@ async def smart_stats_friday(callback: CallbackQuery, db: Database, settings: Se
     await safe_edit(
         callback,
         texts.admin_section_text(
-            f"إحصائية جمعات {year}",
-            "هذه الصفحة جزء من الإحصائيات العامة. نظام التوليد يعطي 0/2 الأولوية ثم 1/2 ويستبعد 2/2 تلقائياً.",
+            f"إحصائية الجمعات — {year}",
+            "المولّد يعطي 0/2 الأولوية، ثم 1/2، ويستبعد 2/2 من السحب التلقائي.",
             stats=[
-                f"⚪ بدون جمعة 0/2: {len(groups[0])}",
-                f"🟡 جمعة واحدة 1/2: {len(groups[1])}",
-                f"🟢 مكتملة 2/2: {len(groups[2])}",
-                *_explain(
-                    "⚪ 0/2 — يعرض أسماء الصيدليات ذات الأولوية الأولى.",
-                    "🟡 1/2 — يعرض أسماء الصيدليات ذات الأولوية الثانية.",
-                    "🟢 2/2 — يعرض الصيدليات التي لا تدخل السحب التلقائي.",
-                    "🔙 رجوع — يرجع للإحصائيات العامة.",
-                ),
+                f"⚪ 0/2: {len(groups[0])}",
+                f"🟡 1/2: {len(groups[1])}",
+                f"🟢 2/2: {len(groups[2])}",
+                *_help("⚪/🟡/🟢 — يفتح أسماء المجموعة.", "🔙 رجوع — يرجع للإحصائيات."),
             ],
         ),
         keyboards.keyboard(
@@ -1188,15 +1076,14 @@ async def smart_stats_friday_group(callback: CallbackQuery, db: Database, settin
     items = [item for item in items if min(item["fridays"], 2) == count]
     pages = max(1, ceil(len(items) / 10))
     page = min(page, pages - 1)
-    selected = items[page * 10 : (page + 1) * 10]
     labels = {0: "⚪ 0/2", 1: "🟡 1/2", 2: "🟢 2/2"}
-    lines = [f"{labels.get(count, '')} <b>صيدليات المجموعة</b>", f"صفحة {page + 1}/{pages}", ""]
-    for item in selected:
-        lines.append(f"• {escape(item['name'])} — 📋 {item['total']} | ☀️ {item['day']} | 🌙 {item['evening']}")
-    lines.extend(["", "🔹 ◀️/▶️ — تنقل بين الأسماء.", "🔹 🔙 رجوع — يرجع لإحصائية الجمعات."])
+    lines = [f"{labels.get(count, '')} <b>الصيدليات</b>", f"صفحة {page + 1}/{pages}", ""]
+    for item in items[page * 10 : (page + 1) * 10]:
+        lines.append(f"• {escape(item['name'])} — 📋{item['total']} ☀️{item['day']} 🌙{item['evening']}")
+    lines.extend(["", *_help("◀️/▶️ — تنقل بين الأسماء.", "🔙 رجوع — يرجع لإحصائية الجمعات.")])
     rows = []
     nav = []
-    if page > 0:
+    if page:
         nav.append(keyboards.button("◀️ السابق", f"a:smart:stats:f:{count}:{page - 1}"))
     if page + 1 < pages:
         nav.append(keyboards.button("التالي ▶️", f"a:smart:stats:f:{count}:{page + 1}"))
@@ -1214,38 +1101,27 @@ async def smart_stats_months(callback: CallbackQuery, db: Database, settings: Se
     year = as_local(utcnow(), settings.timezone).year
     async with db.session_factory() as session:
         items, _ = await pharmacy_year_statistics(session, year=year, timezone=settings.timezone)
-    month_totals = {month: sum(item["months"].get(month, 0) for item in items) for month in range(1, 13)}
-    month_names = ["كانون الثاني", "شباط", "آذار", "نيسان", "أيار", "حزيران", "تموز", "آب", "أيلول", "تشرين الأول", "تشرين الثاني", "كانون الأول"]
-    stats = [f"📅 {month_names[month - 1]}: {month_totals[month]} مناوبة" for month in range(1, 13)]
-    stats.extend(_explain("🔙 رجوع — يرجع للإحصائيات العامة."))
-    await safe_edit(
-        callback,
-        texts.admin_section_text(
-            f"المناوبات حسب الشهر — {year}",
-            "يعرض مجموع المناوبات المسجلة في كل شهر حتى تظهر الفترات الخفيفة أو المزدحمة بسرعة.",
-            stats=stats,
-        ),
-        keyboards.simple_back("a:smart:stats"),
-    )
+    names = ["كانون الثاني", "شباط", "آذار", "نيسان", "أيار", "حزيران", "تموز", "آب", "أيلول", "تشرين الأول", "تشرين الثاني", "كانون الأول"]
+    stats = [f"📅 {names[m - 1]}: {sum(item['months'].get(m, 0) for item in items)} مناوبة" for m in range(1, 13)]
+    stats.extend(_help("🔙 رجوع — يرجع للإحصائيات."))
+    await safe_edit(callback, texts.admin_section_text(f"المناوبات حسب الشهر — {year}", "ملخص جميع المناوبات المسجلة في كل شهر.", stats=stats), keyboards.simple_back("a:smart:stats"))
     await answer_callback(callback)
 
 
 @router.callback_query(F.data.startswith("a:smart:history:"))
-async def smart_history(callback: CallbackQuery, db: Database, settings: Settings) -> None:
+async def smart_history(callback: CallbackQuery, db: Database) -> None:
     if await require_admin(callback, db) is None:
         return
     page = max(0, int(callback.data.rsplit(":", 1)[1]))
     async with db.session_factory() as session:
-        batches = await _smart_published_batches(session, limit=100)
+        batches = await _published(session)
     pages = max(1, ceil(len(batches) / 8))
     page = min(page, pages - 1)
-    selected = batches[page * 8 : (page + 1) * 8]
     rows = []
-    for batch in selected:
-        label = f"📅 {_date_text(batch.period_start)} → {_date_text(batch.period_end)}" if batch.period_start and batch.period_end else f"جدول #{batch.id}"
-        rows.append([keyboards.button(label, f"a:smart:published:{batch.id}", ButtonStyle.PRIMARY)])
+    for batch in batches[page * 8 : (page + 1) * 8]:
+        rows.append([keyboards.button(f"📅 {_date_text(batch.period_start)} → {_date_text(batch.period_end)}", f"a:smart:published:{batch.id}", ButtonStyle.PRIMARY)])
     nav = []
-    if page > 0:
+    if page:
         nav.append(keyboards.button("◀️ السابق", f"a:smart:history:{page - 1}"))
     if page + 1 < pages:
         nav.append(keyboards.button("التالي ▶️", f"a:smart:history:{page + 1}"))
@@ -1254,44 +1130,30 @@ async def smart_history(callback: CallbackQuery, db: Database, settings: Setting
     rows.append([keyboards.button("⬅️ رجوع", SMART_HOME)])
     await safe_edit(
         callback,
-        texts.admin_section_text(
-            "الجداول الذكية السابقة",
-            "يعرض الجداول التي تم اعتمادها ونشرها من المولّد الذكي، ويمكن إعادة تنزيل Word لأي جدول.",
-            stats=[f"📚 العدد: {len(batches)}", *_explain("زر كل فترة — يفتح تفاصيل الجدول وWord.", "◀️/▶️ — تنقل بين الجداول.", "🔙 رجوع — يرجع للقسم الذكي.")],
-        ),
+        texts.admin_section_text("الجداول السابقة", "يفتح الجداول الذكية التي تم اعتمادها ويمكن إعادة تصدير Word.", stats=[f"📚 العدد: {len(batches)}", *_help("زر الفترة — يفتح الجدول.", "◀️/▶️ — تنقل.", "🔙 رجوع — يرجع للقسم الذكي.")]),
         keyboards.keyboard(rows),
     )
     await answer_callback(callback)
 
 
 @router.callback_query(F.data.startswith("a:smart:published:"))
-async def smart_published(callback: CallbackQuery, db: Database, settings: Settings) -> None:
+async def smart_published(callback: CallbackQuery, db: Database) -> None:
     if await require_admin(callback, db) is None:
         return
     batch_id = int(callback.data.rsplit(":", 1)[1])
     async with db.session_factory() as session:
         batch = await repositories.get_import_batch(session, batch_id)
-        if batch is None or batch.source_type != SMART_SOURCE_TYPE or batch.status != "published":
-            await answer_callback(callback, "الجدول غير موجود.", alert=True)
-            return
-        analysis = await analyze_batch(session, batch, settings.timezone)
+    if batch is None or batch.source_type != SMART_SOURCE_TYPE or batch.status != "published":
+        await answer_callback(callback, "الجدول غير موجود.", alert=True)
+        return
     await safe_edit(
         callback,
         texts.admin_section_text(
             f"الجدول الذكي #{batch.id}",
-            "هذا جدول منشور ومحفوظ في الأرشيف.",
-            stats=[
-                f"📅 {_date_text(batch.period_start)} → {_date_text(batch.period_end)}" if batch.period_start and batch.period_end else "",
-                f"⚖️ تحليل التوزيع: {analysis.rating}",
-                *_explain("📄 تصدير Word — يعيد إنشاء نفس الجدول الرسمي.", "🔙 رجوع — يرجع لأرشيف الجداول."),
-            ],
+            "جدول منشور ومحفوظ في الأرشيف.",
+            stats=[f"📅 {_date_text(batch.period_start)} → {_date_text(batch.period_end)}", *_help("📄 Word — يعيد إنشاء الملف الرسمي.", "🔙 رجوع — يرجع للأرشيف.")],
         ),
-        keyboards.keyboard(
-            [
-                [keyboards.button("📄 تصدير Word", f"a:smart:word:{batch.id}", ButtonStyle.PRIMARY)],
-                [keyboards.button("⬅️ رجوع", "a:smart:history:0")],
-            ]
-        ),
+        keyboards.keyboard([[keyboards.button("📄 تصدير Word", f"a:smart:word:{batch.id}", ButtonStyle.PRIMARY)], [keyboards.button("⬅️ رجوع", "a:smart:history:0")]]),
     )
     await answer_callback(callback)
 
@@ -1304,18 +1166,17 @@ async def smart_rules(callback: CallbackQuery, db: Database) -> None:
         callback,
         texts.admin_section_text(
             "قواعد التوزيع الذكي",
-            "المولّد لا يعمل كسحب أسماء أعمى؛ يحلل تاريخ كل صيدلية ويجرب عدة توزيعات ثم يحتفظ بالأفضل.",
+            "البوت يجرب عدة توزيعات ويختار الأفضل بدلاً من سحب أسماء عشوائي أعمى.",
             stats=[
                 "⛔ ممنوع نفس الصيدلية نهاري وليلي بنفس اليوم.",
-                "🔁 يتجنب إعطاء الصيدلية يومين متتاليين، ولا يرخّي هذا الشرط إلا إذا ضاقت الخيارات.",
-                "⚖️ يعطي أفضلية لمن لديها إجمالي مناوبات أقل.",
-                "☀️🌙 يوازن النهاري والليلي لكل صيدلية.",
-                "🕌 الجمعة: 0/2 أولاً، ثم 1/2، و2/2 لا تدخل السحب التلقائي.",
-                "🎲 العشوائية تدخل بين الخيارات المتقاربة فقط حتى يبقى التوزيع عادلاً وغير ثابت.",
-                "🧠 يولد عدة احتمالات ويقارن التوازن والتعارضات قبل عرض المسودة.",
-                "🔒 التعديل اليدوي يمكن تثبيته حتى لا يتغير عند إعادة التوزيع.",
-                "✅ لا يوجد نشر تلقائي؛ دائماً معاينة ثم تحليل ثم تعديل ثم تأكيد نهائي.",
-                *_explain("🔙 رجوع — يرجع للقسم الذكي."),
+                "🔁 يتجنب يومين متتاليين قدر الإمكان.",
+                "⚖️ يعطي أفضلية للأقل مناوبات.",
+                "☀️🌙 يوازن النهاري والليلي.",
+                "🕌 الجمعة: 0/2 ثم 1/2، و2/2 مستبعدة تلقائياً.",
+                "🎲 العشوائية فقط بين الخيارات المتقاربة.",
+                "🔒 التعديل اليدوي يثبت ولا يضيع عند إعادة التوزيع.",
+                "✅ لا يوجد نشر تلقائي: معاينة وتحليل وتعديل ثم تأكيد نهائي.",
+                *_help("🔙 رجوع — يرجع للقسم الذكي."),
             ],
         ),
         keyboards.simple_back(SMART_HOME),
