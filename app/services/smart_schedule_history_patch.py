@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from datetime import date, timedelta
+from datetime import date, datetime, timedelta
 from typing import Any, Mapping
 from zoneinfo import ZoneInfo
 
@@ -10,6 +10,7 @@ from app.models import ImportBatch
 from app.services import smart_schedule as smart
 from app.services.friday_history import (
     FRIDAY_PAIRS_2026,
+    REFERENCE_THROUGH,
     friday_cycle_for,
     friday_history_for_pharmacies,
 )
@@ -22,7 +23,25 @@ from app.services.shift_schedule_tools import ShiftTimes
 from app.utils import as_local, utcnow
 
 
+_ORIGINAL_DEFAULT_PERIOD = smart.default_period
 _ORIGINAL_PHARMACY_YEAR_STATISTICS = smart.pharmacy_year_statistics
+
+
+def default_period(
+    latest_end: datetime | None,
+    timezone: ZoneInfo,
+    now: datetime | None = None,
+) -> tuple[date, date]:
+    """Keep the normal next-period rule, but never start inside photo-fixed dates."""
+    start_date, end_date = _ORIGINAL_DEFAULT_PERIOD(latest_end, timezone, now=now)
+    reference_cycle = friday_cycle_for(REFERENCE_THROUGH)
+    if (
+        start_date <= REFERENCE_THROUGH
+        and friday_cycle_for(start_date).start == reference_cycle.start
+    ):
+        start_date = REFERENCE_THROUGH + timedelta(days=1)
+        return smart.next_month_period(start_date)
+    return start_date, end_date
 
 
 def _merge_reference_into_ledgers(
@@ -300,6 +319,7 @@ async def pharmacy_year_statistics(
 # Production handlers import these names from app.services.smart_schedule after
 # this module is loaded by app.handlers.__init__. Replacing only these integration
 # points keeps the proven scheduling algorithm unchanged.
+smart.default_period = default_period
 smart.generate_import_rows = generate_import_rows
 smart.analyze_batch = analyze_batch
 smart.pharmacy_year_statistics = pharmacy_year_statistics
