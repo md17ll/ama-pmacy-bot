@@ -9,3 +9,6 @@ from app.services import smart_schedule_history_patch as _smart_schedule_history
 
 # Attach the intelligent schedule workflow to the existing admin router.
 from . import smart_schedules as _smart_schedules  # noqa: F401,E402
+
+# Simplify only the smart-schedule admin UI without changing scheduling logic.
+from . import smart_schedule_ui as _smart_schedule_ui  # noqa: F401,E402
