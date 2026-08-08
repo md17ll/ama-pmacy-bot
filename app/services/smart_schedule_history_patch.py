@@ -101,6 +101,16 @@ def _photo_overlap(start_date: date, end_date: date) -> list[date]:
     )
 
 
+def _published_overlap(shifts, start_date: date, end_date: date, timezone: ZoneInfo) -> list[date]:
+    return sorted(
+        {
+            as_local(shift.start_at, timezone).date()
+            for shift in shifts
+            if start_date <= as_local(shift.start_at, timezone).date() <= end_date
+        }
+    )
+
+
 def _ensure_single_friday_cycle(start_date: date, end_date: date) -> None:
     start_cycle = friday_cycle_for(start_date)
     end_cycle = friday_cycle_for(end_date)
@@ -131,6 +141,15 @@ async def generate_import_rows(
         )
 
     pharmacies, shifts = await smart._active_pharmacies_and_shifts(session)
+    published_overlap = _published_overlap(shifts, start_date, end_date, timezone)
+    if published_overlap:
+        formatted = "، ".join(value.strftime("%d/%m/%Y") for value in published_overlap[:6])
+        suffix = "…" if len(published_overlap) > 6 else ""
+        raise ValueError(
+            "الفترة تتداخل مع مناوبات منشورة مسبقاً "
+            f"({formatted}{suffix}). ابدأ بعد آخر يوم منشور لتجنب تكرار المناوبات."
+        )
+
     ledgers = smart._build_ledgers(
         pharmacies,
         shifts,
