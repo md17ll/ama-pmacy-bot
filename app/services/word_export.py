@@ -22,7 +22,26 @@ from app.utils import as_local
 
 MAX_DATES_PER_PAGE = 38
 ROWS_PER_SIDE = 19
-TEMPLATE_CHUNKS_DIR = Path(__file__).resolve().parent.parent / "templates" / "official_schedule_template.b64"
+TEMPLATE_CHUNKS_DIR = Path(__file__).resolve().parent.parent / "templates" / "official_schedule_template.exact"
+TEMPLATE_CHUNK_NAMES = (
+    "00a",
+    "00b",
+    "00c",
+    "00d",
+    "01",
+    "02a",
+    "02b",
+    "02c",
+    "02d",
+    "03",
+    "04",
+    "05a",
+    "05b",
+    "05c",
+    "05d1",
+    "05d2",
+    "06",
+)
 TEMPLATE_SHA1 = "f42cc3b7780d27cc946c8411e6e66d15a429be02"
 TEMPLATE_SIZE = 19840
 LEVANT_MONTHS = {
@@ -58,8 +77,8 @@ def template_bytes() -> bytes:
     """Reconstruct the approved DOCX exactly and verify its source fingerprint."""
     if not TEMPLATE_CHUNKS_DIR.is_dir():
         raise WordExportError("قالب Word الرسمي غير موجود داخل النظام.")
-    parts = sorted(TEMPLATE_CHUNKS_DIR.glob("part-*"))
-    if not parts:
+    parts = [TEMPLATE_CHUNKS_DIR / name for name in TEMPLATE_CHUNK_NAMES]
+    if any(not part.is_file() for part in parts):
         raise WordExportError("قالب Word الرسمي غير مكتمل داخل النظام.")
     try:
         encoded = "".join(part.read_text(encoding="ascii").strip() for part in parts)
