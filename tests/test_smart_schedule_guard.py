@@ -12,6 +12,8 @@ from app.handlers.smart_schedule_guard import _batch_id_from_callback
         ("a:smart:view:12:0", (True, 12)),
         ("a:smart:choose:12:99:0", (True, 12)),
         ("a:smart:pick:12:99:5", (True, 12)),
+        ("a:smart:savepick:12:99:5", (True, 12)),
+        ("a:smart:savepick:not-a-number:99:5", (True, None)),
         ("a:smart:publish:12", (True, 12)),
         ("a:smart:delete:12", (True, 12)),
         ("a:smart:advanced:draft:12", (True, 12)),
