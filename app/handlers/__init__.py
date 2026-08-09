@@ -35,5 +35,9 @@ from . import smart_schedule_template_guard as _smart_schedule_template_guard  #
 # Use the approved Word template and transparent pharmacy-edit controls.
 from . import smart_schedule_template_ui as _smart_schedule_template_ui  # noqa: F401,E402
 
+# Do not let the older simplified draft screen rewrite/hide the approved
+# template controls after smart_schedule_template_ui has built them.
+from . import smart_schedule_template_ui_guard as _smart_schedule_template_ui_guard  # noqa: F401,E402
+
 # Ensure Word reads the smart draft's explicit day/evening slots, not clock guesses.
 from . import smart_schedule_word_slot_patch as _smart_schedule_word_slot_patch  # noqa: F401,E402
