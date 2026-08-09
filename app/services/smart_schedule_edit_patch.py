@@ -85,7 +85,7 @@ async def generate_import_rows(
     return rows, analysis
 
 
-# Smart handlers are imported after this patch. They receive these patched
-# functions directly from app.services.smart_schedule.
-smart.fixed_from_batch = fixed_from_batch
-smart.generate_import_rows = generate_import_rows
+# Deliberately do not replace app.services.smart_schedule functions globally.
+# The smart-schedule Telegram workflow installs these wrappers locally after its
+# original handlers are imported. This preserves the proven service integration
+# contract while adding reversible edit metadata only where it is needed.
