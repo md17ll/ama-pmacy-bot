@@ -10,6 +10,9 @@ from app.services import smart_schedule_history_patch as _smart_schedule_history
 # Replace random smart-schedule selection with deterministic fairness rules.
 from app.services import smart_schedule_fair_patch as _smart_schedule_fair_patch  # noqa: F401,E402
 
+# Preserve original smart choices so manual pharmacy edits can be reverted.
+from app.services import smart_schedule_edit_patch as _smart_schedule_edit_patch  # noqa: F401,E402
+
 # Guard batch-bearing smart callbacks before the workflow handlers are registered.
 from . import smart_schedule_guard as _smart_schedule_guard  # noqa: F401,E402
 
@@ -21,3 +24,6 @@ from . import smart_schedule_ui as _smart_schedule_ui  # noqa: F401,E402
 
 # Add the cycle-aware photographed Friday ledger editor.
 from . import smart_schedule_friday_ui as _smart_schedule_friday_ui  # noqa: F401,E402
+
+# Use the approved Word template and transparent pharmacy-edit controls.
+from . import smart_schedule_template_ui as _smart_schedule_template_ui  # noqa: F401,E402
