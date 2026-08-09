@@ -20,6 +20,7 @@ _BATCH_ACTIONS = {
     "lock",
     "choose",
     "pick",
+    "savepick",
     "analysis",
     "rerollask",
     "reroll",
