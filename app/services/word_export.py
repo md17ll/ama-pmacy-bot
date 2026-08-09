@@ -72,22 +72,37 @@ def _load_template():
     return document, title, table, footer
 
 
-def _replace_paragraph_text(paragraph, text: str) -> None:
+def _replace_paragraph_text(paragraph, text: str, *, style_run=None) -> None:
     """Replace visible text while preserving the exact formatting of the template."""
     if paragraph.runs:
-        paragraph.runs[0].text = text
-        for run in paragraph.runs[1:]:
-            run.text = ""
-    else:
-        paragraph.add_run(text)
+        run = paragraph.runs[0]
+        run.text = text
+        if style_run is not None and run._r.rPr is None and style_run._r.rPr is not None:
+            run._r.insert(0, deepcopy(style_run._r.rPr))
+        for extra in paragraph.runs[1:]:
+            extra.text = ""
+        return
+
+    run = paragraph.add_run(text)
+    if style_run is not None and style_run._r.rPr is not None:
+        run._r.insert(0, deepcopy(style_run._r.rPr))
 
 
-def _replace_cell_text(cell, text: str) -> None:
+def _first_styled_run(cell):
+    for paragraph in cell.paragraphs:
+        for run in paragraph.runs:
+            if run.text.strip() or run._r.rPr is not None:
+                return run
+    return None
+
+
+def _replace_cell_text(cell, text: str, *, style_cell=None) -> None:
     if not cell.paragraphs:
         paragraph = cell.add_paragraph()
     else:
         paragraph = cell.paragraphs[0]
-    _replace_paragraph_text(paragraph, text)
+    style_run = _first_styled_run(style_cell) if style_cell is not None else None
+    _replace_paragraph_text(paragraph, text, style_run=style_run)
     for extra in cell.paragraphs[1:]:
         for run in extra.runs:
             run.text = ""
@@ -129,6 +144,15 @@ def _fill_page(
 ) -> None:
     _replace_paragraph_text(title, _title_for(page_dates[0]))
 
+    style_cells = {
+        0: table.rows[1].cells[0],
+        1: table.rows[1].cells[1],
+        2: table.rows[1].cells[2],
+        3: table.rows[1].cells[3],
+        4: table.rows[1].cells[4],
+        5: table.rows[1].cells[5],
+    }
+
     for row_index in range(ROWS_PER_SIDE):
         row = table.rows[row_index + 1]
         for base, date_index in ((0, row_index), (3, ROWS_PER_SIDE + row_index)):
@@ -139,9 +163,21 @@ def _fill_page(
 
             duty_date = page_dates[date_index]
             values = grouped[duty_date]
-            _replace_cell_text(row.cells[base], _date_label(duty_date))
-            _replace_cell_text(row.cells[base + 1], _joined_names(values["day"]))
-            _replace_cell_text(row.cells[base + 2], _joined_names(values["evening"]))
+            _replace_cell_text(
+                row.cells[base],
+                _date_label(duty_date),
+                style_cell=style_cells[base],
+            )
+            _replace_cell_text(
+                row.cells[base + 1],
+                _joined_names(values["day"]),
+                style_cell=style_cells[base + 1],
+            )
+            _replace_cell_text(
+                row.cells[base + 2],
+                _joined_names(values["evening"]),
+                style_cell=style_cells[base + 2],
+            )
 
 
 def _append_template_page(document, pristine, page_dates, grouped) -> None:
@@ -182,16 +218,15 @@ def build_official_word_schedule(
     if not dates:
         raise WordExportError("لا توجد مناوبات قابلة للتصدير إلى Word.")
 
-    document, title, table, footer = _load_template()
-    pristine_document, pristine_title, pristine_table, pristine_footer = _load_template()
+    document, title, table, _footer = _load_template()
+    _pristine_document, pristine_title, pristine_table, pristine_footer = _load_template()
     pristine = {
         "title": pristine_title._p,
         "table": pristine_table._tbl,
         "footer": pristine_footer._p,
     }
 
-    first_page = dates[:MAX_DATES_PER_PAGE]
-    _fill_page(title, table, first_page, grouped)
+    _fill_page(title, table, dates[:MAX_DATES_PER_PAGE], grouped)
 
     for start in range(MAX_DATES_PER_PAGE, len(dates), MAX_DATES_PER_PAGE):
         _append_template_page(
