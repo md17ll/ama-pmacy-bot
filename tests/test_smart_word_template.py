@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import asyncio
+import hashlib
 from datetime import date, datetime, time, timezone
 from io import BytesIO
 from types import SimpleNamespace
@@ -11,7 +12,12 @@ from docx import Document
 import app.handlers  # noqa: F401 - activates smart schedule patches
 from app.services import smart_schedule_edit_patch as edit_patch
 from app.services.shift_schedule_tools import ShiftTimes
-from app.services.word_export import TEMPLATE_PATH, build_official_word_schedule
+from app.services.word_export import (
+    TEMPLATE_SHA1,
+    TEMPLATE_SIZE,
+    build_official_word_schedule,
+    template_bytes,
+)
 
 
 TZ = ZoneInfo("Asia/Damascus")
@@ -31,8 +37,10 @@ def _shift(day: date, value: time, name: str):
 
 
 def test_uploaded_docx_is_the_authoritative_word_template() -> None:
-    assert TEMPLATE_PATH.is_file()
-    source = Document(str(TEMPLATE_PATH))
+    raw = template_bytes()
+    assert len(raw) == TEMPLATE_SIZE == 19840
+    assert hashlib.sha1(raw).hexdigest() == TEMPLATE_SHA1 == "f42cc3b7780d27cc946c8411e6e66d15a429be02"
+    source = Document(BytesIO(raw))
     assert len(source.tables) == 1
     assert len(source.tables[0].rows) == 20
     assert len(source.tables[0].columns) == 6
