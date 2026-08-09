@@ -173,7 +173,13 @@ async def smart_revert_generated_choice(
     async with db.session_factory() as session:
         batch = await repositories.get_import_batch(session, batch_id)
         target = next((row for row in batch.rows if row.id == row_id), None) if batch else None
-        if batch is None or batch.status != "draft" or target is None or target.start_at is None:
+        if (
+            batch is None
+            or batch.source_type != smart_ui.SMART_SOURCE_TYPE
+            or batch.status != "draft"
+            or target is None
+            or target.start_at is None
+        ):
             await smart_ui.answer_callback(callback, "المناوبة غير قابلة للرجوع.", alert=True)
             return
 
@@ -217,8 +223,8 @@ async def smart_revert_generated_choice(
         target.errors = []
         target.status = "ready"
         data.pop("manual_override", None)
-        data.pop("generated_pharmacy_id", None)
-        data.pop("generated_pharmacy_name", None)
+        data["generated_pharmacy_id"] = generated_id
+        data["generated_pharmacy_name"] = pharmacy.name
         data["locked"] = False
         target.raw_data = data
         batch.summary = repositories.summarize_import_rows(batch.rows)
