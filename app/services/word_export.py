@@ -85,7 +85,10 @@ def template_bytes() -> bytes:
         data = base64.b64decode(encoded, validate=True)
     except (OSError, ValueError) as exc:
         raise WordExportError("تعذر قراءة قالب Word الرسمي.") from exc
-    if len(data) != TEMPLATE_SIZE or hashlib.sha1(data).hexdigest() != TEMPLATE_SHA1:
+    # SHA-1 is used only as a fingerprint of the user-approved source file,
+    # never for passwords, signatures, authentication, or cryptographic trust.
+    fingerprint = hashlib.sha1(data, usedforsecurity=False).hexdigest()
+    if len(data) != TEMPLATE_SIZE or fingerprint != TEMPLATE_SHA1:
         raise WordExportError("قالب Word الرسمي لا يطابق الملف المعتمد.")
     return data
 
@@ -157,13 +160,21 @@ def _title_for(first_date: date) -> str:
     )
 
 
+def _shift_period(shift, local_start) -> str:
+    """Prefer the smart draft's explicit slot; infer only for legacy shifts."""
+    explicit = str(getattr(shift, "period", "") or "").strip().lower()
+    if explicit in {"day", "evening"}:
+        return explicit
+    return "day" if local_start.time().replace(tzinfo=None) < time(18, 0) else "evening"
+
+
 def _group_shifts(shifts: Iterable[Shift], timezone: ZoneInfo) -> dict[date, dict[str, list[str]]]:
     grouped: dict[date, dict[str, list[str]]] = defaultdict(lambda: {"day": [], "evening": []})
     for shift in sorted(shifts, key=lambda item: (item.start_at, item.pharmacy.name)):
         if not getattr(shift, "active", True):
             continue
         local_start = as_local(shift.start_at, timezone)
-        period = "day" if local_start.time().replace(tzinfo=None) < time(18, 0) else "evening"
+        period = _shift_period(shift, local_start)
         name = shift.pharmacy.name.strip()
         if name and name not in grouped[local_start.date()][period]:
             grouped[local_start.date()][period].append(name)
@@ -249,7 +260,7 @@ def build_official_word_schedule(
     footer, dimensions, borders, fonts and other visual formatting come directly
     from the template and are not regenerated in code.
     """
-    del times  # Times stay exactly as written in the approved Word template.
+    del times  # Displayed times stay exactly as written in the approved template.
 
     grouped = _group_shifts(shifts, timezone)
     dates = sorted(grouped)
