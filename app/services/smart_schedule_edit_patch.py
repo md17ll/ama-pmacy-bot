@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from datetime import date
+from types import SimpleNamespace
 from typing import Any
 from zoneinfo import ZoneInfo
 
@@ -83,6 +84,33 @@ async def generate_import_rows(
 
         row["raw_data"] = data
     return rows, analysis
+
+
+def draft_shift_views(batch) -> list[Any]:
+    """Expose the draft's explicit day/evening slot to the Word exporter.
+
+    The Word file must mirror the smart draft exactly. It must never infer a
+    slot from the clock when the draft already says whether a row is day or
+    evening, because shift times are configurable.
+    """
+    result: list[Any] = []
+    for row in batch.rows:
+        if not row.start_at or not row.end_at or not row.matched_pharmacy:
+            continue
+        data = dict(row.raw_data or {})
+        period = str(data.get("period") or "")
+        if period not in {smart.DAY, smart.EVENING}:
+            period = smart._period_for_start(row.start_at, batch.timezone) if hasattr(batch, "timezone") else None
+        result.append(
+            SimpleNamespace(
+                start_at=row.start_at,
+                end_at=row.end_at,
+                pharmacy=SimpleNamespace(name=row.matched_pharmacy.name),
+                active=True,
+                period=period,
+            )
+        )
+    return result
 
 
 # Deliberately do not replace app.services.smart_schedule functions globally.
