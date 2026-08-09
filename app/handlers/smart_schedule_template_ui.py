@@ -13,6 +13,7 @@ from app.db import Database
 from app.handlers import smart_schedules as smart_ui
 from app.handlers.admin import router
 from app.handlers.common import require_writer
+from app.services import smart_schedule_edit_patch as edit_patch
 from app.utils import as_local
 
 
@@ -237,5 +238,9 @@ async def smart_revert_generated_choice(
 
 # Existing smart handlers look these module globals up at runtime, so replacing
 # the render helpers upgrades the UI without duplicating the workflow handlers.
+# The edit wrappers are scoped here too: app.services.smart_schedule keeps the
+# original Friday-history integration unchanged for the rest of the application.
+smart_ui.generate_import_rows = edit_patch.generate_import_rows
+smart_ui.fixed_from_batch = edit_patch.fixed_from_batch
 smart_ui._render_draft = _render_draft
 smart_ui._render_day = _render_day
