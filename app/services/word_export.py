@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+import base64
+import hashlib
 from collections import defaultdict
 from copy import deepcopy
 from datetime import date, time
@@ -20,7 +22,9 @@ from app.utils import as_local
 
 MAX_DATES_PER_PAGE = 38
 ROWS_PER_SIDE = 19
-TEMPLATE_PATH = Path(__file__).resolve().parent.parent / "templates" / "official_schedule_template.docx"
+TEMPLATE_CHUNKS_DIR = Path(__file__).resolve().parent.parent / "templates" / "official_schedule_template.b64"
+TEMPLATE_SHA1 = "f42cc3b7780d27cc946c8411e6e66d15a429be02"
+TEMPLATE_SIZE = 19840
 LEVANT_MONTHS = {
     1: "كانون الثاني",
     2: "شباط",
@@ -50,10 +54,25 @@ class WordExportError(ValueError):
     pass
 
 
-def _load_template():
-    if not TEMPLATE_PATH.is_file():
+def template_bytes() -> bytes:
+    """Reconstruct the approved DOCX exactly and verify its source fingerprint."""
+    if not TEMPLATE_CHUNKS_DIR.is_dir():
         raise WordExportError("قالب Word الرسمي غير موجود داخل النظام.")
-    document = Document(str(TEMPLATE_PATH))
+    parts = sorted(TEMPLATE_CHUNKS_DIR.glob("part-*"))
+    if not parts:
+        raise WordExportError("قالب Word الرسمي غير مكتمل داخل النظام.")
+    try:
+        encoded = "".join(part.read_text(encoding="ascii").strip() for part in parts)
+        data = base64.b64decode(encoded, validate=True)
+    except (OSError, ValueError) as exc:
+        raise WordExportError("تعذر قراءة قالب Word الرسمي.") from exc
+    if len(data) != TEMPLATE_SIZE or hashlib.sha1(data).hexdigest() != TEMPLATE_SHA1:
+        raise WordExportError("قالب Word الرسمي لا يطابق الملف المعتمد.")
+    return data
+
+
+def _load_template():
+    document = Document(BytesIO(template_bytes()))
     if len(document.tables) != 1:
         raise WordExportError("قالب Word الرسمي غير صالح: يجب أن يحتوي جدولاً واحداً.")
     table = document.tables[0]
@@ -206,7 +225,7 @@ def build_official_word_schedule(
 ) -> bytes:
     """Fill the user's uploaded Word layout with the smart-scheduler result.
 
-    The uploaded DOCX is the authoritative visual template. The scheduler remains
+    The approved DOCX is the authoritative visual template. The scheduler remains
     the authoritative source for pharmacy names and day/evening placement. Header,
     footer, dimensions, borders, fonts and other visual formatting come directly
     from the template and are not regenerated in code.
