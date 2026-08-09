@@ -25,5 +25,8 @@ from . import smart_schedule_ui as _smart_schedule_ui  # noqa: F401,E402
 # Add the cycle-aware photographed Friday ledger editor.
 from . import smart_schedule_friday_ui as _smart_schedule_friday_ui  # noqa: F401,E402
 
+# Guard the new smart-revert callback before registering its writer handler.
+from . import smart_schedule_template_guard as _smart_schedule_template_guard  # noqa: F401,E402
+
 # Use the approved Word template and transparent pharmacy-edit controls.
 from . import smart_schedule_template_ui as _smart_schedule_template_ui  # noqa: F401,E402
