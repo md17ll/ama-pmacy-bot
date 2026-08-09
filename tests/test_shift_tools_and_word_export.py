@@ -188,7 +188,7 @@ def test_word_export_matches_official_two_group_layout_and_round_trips() -> None
     table = document.tables[0]
     assert len(table.columns) == 6
     assert len(table.rows) == 20
-    assert "جدول المنوبات لمدينة عامودة" in document.paragraphs[0].text
+    assert any("جدول المنوبات لمدينة عامودة" in paragraph.text for paragraph in document.paragraphs)
     assert table.rows[1].cells[1].text == "نهارية 1"
     assert table.rows[1].cells[2].text == "مسائية 1"
     assert table.rows[1].cells[4].text == "نهارية 20"

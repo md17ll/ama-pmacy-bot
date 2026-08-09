@@ -1,19 +1,19 @@
 from __future__ import annotations
 
+import base64
+import hashlib
 from collections import defaultdict
+from copy import deepcopy
 from datetime import date, time
 from io import BytesIO
-from math import ceil
+from pathlib import Path
 from typing import Iterable
 from zoneinfo import ZoneInfo
 
 from docx import Document
-from docx.enum.section import WD_ORIENT
-from docx.enum.table import WD_CELL_VERTICAL_ALIGNMENT, WD_ROW_HEIGHT_RULE
-from docx.enum.text import WD_ALIGN_PARAGRAPH
-from docx.oxml import OxmlElement
-from docx.oxml.ns import qn
-from docx.shared import Inches, Pt, RGBColor
+from docx.enum.text import WD_BREAK
+from docx.table import Table
+from docx.text.paragraph import Paragraph
 
 from app.models import Shift
 from app.services.shift_schedule_tools import ShiftTimes
@@ -21,8 +21,29 @@ from app.utils import as_local
 
 
 MAX_DATES_PER_PAGE = 38
-DATE_BLUE = RGBColor(0x2F, 0x54, 0x96)
-TITLE_RED = RGBColor(0xFF, 0x00, 0x00)
+ROWS_PER_SIDE = 19
+TEMPLATE_CHUNKS_DIR = Path(__file__).resolve().parent.parent / "templates" / "official_schedule_template.exact"
+TEMPLATE_CHUNK_NAMES = (
+    "00a",
+    "00b",
+    "00c",
+    "00d",
+    "01",
+    "02a",
+    "02b",
+    "02c",
+    "02d",
+    "03",
+    "04",
+    "05a",
+    "05b",
+    "05c",
+    "05d1",
+    "05d2",
+    "06",
+)
+TEMPLATE_SHA1 = "f42cc3b7780d27cc946c8411e6e66d15a429be02"
+TEMPLATE_SIZE = 19840
 LEVANT_MONTHS = {
     1: "كانون الثاني",
     2: "شباط",
@@ -46,115 +67,86 @@ ARABIC_DAYS = {
     5: "السبت",
     6: "الاحد",
 }
-ARABIC_DIGITS = str.maketrans("0123456789", "٠١٢٣٤٥٦٧٨٩")
 
 
 class WordExportError(ValueError):
     pass
 
 
-def _rtl_paragraph(paragraph) -> None:
-    paragraph.alignment = WD_ALIGN_PARAGRAPH.CENTER
-    p_pr = paragraph._p.get_or_add_pPr()
-    bidi = p_pr.find(qn("w:bidi"))
-    if bidi is None:
-        bidi = OxmlElement("w:bidi")
-        p_pr.append(bidi)
+def template_bytes() -> bytes:
+    """Reconstruct the approved DOCX exactly and verify its source fingerprint."""
+    if not TEMPLATE_CHUNKS_DIR.is_dir():
+        raise WordExportError("قالب Word الرسمي غير موجود داخل النظام.")
+    parts = [TEMPLATE_CHUNKS_DIR / name for name in TEMPLATE_CHUNK_NAMES]
+    if any(not part.is_file() for part in parts):
+        raise WordExportError("قالب Word الرسمي غير مكتمل داخل النظام.")
+    try:
+        encoded = "".join(part.read_text(encoding="ascii").strip() for part in parts)
+        data = base64.b64decode(encoded, validate=True)
+    except (OSError, ValueError) as exc:
+        raise WordExportError("تعذر قراءة قالب Word الرسمي.") from exc
+    # SHA-1 is used only as a fingerprint of the user-approved source file,
+    # never for passwords, signatures, authentication, or cryptographic trust.
+    fingerprint = hashlib.sha1(data, usedforsecurity=False).hexdigest()
+    if len(data) != TEMPLATE_SIZE or fingerprint != TEMPLATE_SHA1:
+        raise WordExportError("قالب Word الرسمي لا يطابق الملف المعتمد.")
+    return data
 
 
-def _set_run_rtl(run) -> None:
-    r_pr = run._r.get_or_add_rPr()
-    rtl = r_pr.find(qn("w:rtl"))
-    if rtl is None:
-        rtl = OxmlElement("w:rtl")
-        r_pr.append(rtl)
-    fonts = r_pr.find(qn("w:rFonts"))
-    if fonts is None:
-        fonts = OxmlElement("w:rFonts")
-        r_pr.insert(0, fonts)
-    for attr in ("ascii", "hAnsi", "cs", "eastAsia"):
-        fonts.set(qn(f"w:{attr}"), "Arial")
-    fonts.set(qn("w:hint"), "cs")
-    if run.bold:
-        bold_cs = r_pr.find(qn("w:bCs"))
-        if bold_cs is None:
-            r_pr.append(OxmlElement("w:bCs"))
-    if run.font.size is not None:
-        size_cs = r_pr.find(qn("w:szCs"))
-        if size_cs is None:
-            size_cs = OxmlElement("w:szCs")
-            r_pr.append(size_cs)
-        size_cs.set(qn("w:val"), str(int(run.font.size.pt * 2)))
+def _load_template():
+    document = Document(BytesIO(template_bytes()))
+    if len(document.tables) != 1:
+        raise WordExportError("قالب Word الرسمي غير صالح: يجب أن يحتوي جدولاً واحداً.")
+    table = document.tables[0]
+    if len(table.rows) != ROWS_PER_SIDE + 1 or len(table.columns) != 6:
+        raise WordExportError("قالب Word الرسمي غير صالح: بنية الجدول تغيرت.")
+    title = next(
+        (paragraph for paragraph in document.paragraphs if "جدول المنوبات لمدينة عامودة" in paragraph.text),
+        None,
+    )
+    footer = next(
+        (paragraph for paragraph in document.paragraphs if "الدوام المسائي" in paragraph.text),
+        None,
+    )
+    if title is None or footer is None:
+        raise WordExportError("قالب Word الرسمي غير صالح: العنوان أو التذييل غير موجود.")
+    return document, title, table, footer
 
 
-def _set_cell_margins(cell, *, top: int = 20, start: int = 30, bottom: int = 20, end: int = 30) -> None:
-    tc = cell._tc
-    tc_pr = tc.get_or_add_tcPr()
-    tc_mar = tc_pr.first_child_found_in("w:tcMar")
-    if tc_mar is None:
-        tc_mar = OxmlElement("w:tcMar")
-        tc_pr.append(tc_mar)
-    for name, value in (("top", top), ("start", start), ("bottom", bottom), ("end", end)):
-        node = tc_mar.find(qn(f"w:{name}"))
-        if node is None:
-            node = OxmlElement(f"w:{name}")
-            tc_mar.append(node)
-        node.set(qn("w:w"), str(value))
-        node.set(qn("w:type"), "dxa")
+def _replace_paragraph_text(paragraph, text: str, *, style_run=None) -> None:
+    """Replace visible text while preserving the exact formatting of the template."""
+    if paragraph.runs:
+        run = paragraph.runs[0]
+        run.text = text
+        if style_run is not None and run._r.rPr is None and style_run._r.rPr is not None:
+            run._r.insert(0, deepcopy(style_run._r.rPr))
+        for extra in paragraph.runs[1:]:
+            extra.text = ""
+        return
+
+    run = paragraph.add_run(text)
+    if style_run is not None and style_run._r.rPr is not None:
+        run._r.insert(0, deepcopy(style_run._r.rPr))
 
 
-def _clear_cell(cell) -> None:
-    cell.text = ""
-    paragraph = cell.paragraphs[0]
-    _rtl_paragraph(paragraph)
-    paragraph.paragraph_format.space_before = Pt(0)
-    paragraph.paragraph_format.space_after = Pt(0)
-    paragraph.paragraph_format.line_spacing = 1
-    cell.vertical_alignment = WD_CELL_VERTICAL_ALIGNMENT.CENTER
-    _set_cell_margins(cell)
+def _first_styled_run(cell):
+    for paragraph in cell.paragraphs:
+        for run in paragraph.runs:
+            if run.text.strip() or run._r.rPr is not None:
+                return run
+    return None
 
 
-def _write_cell(
-    cell,
-    text: str,
-    *,
-    size: float,
-    color: RGBColor | None = None,
-    bold: bool = True,
-) -> None:
-    _clear_cell(cell)
-    paragraph = cell.paragraphs[0]
-    lines = text.split("\n")
-    for index, line in enumerate(lines):
-        run = paragraph.add_run(line)
-        if index < len(lines) - 1:
-            run.add_break()
-        run.bold = bold
-        run.font.size = Pt(size)
-        run.font.name = "Arial"
-        if color is not None:
-            run.font.color.rgb = color
-        _set_run_rtl(run)
-
-
-def _time_12h(
-    value: time,
-    *,
-    arabic_digits: bool,
-    dot: bool = False,
-    always_minutes: bool = False,
-) -> str:
-    hour = value.hour % 12 or 12
-    separator = "." if dot else ":"
-    if value.minute or always_minutes:
-        rendered = f"{hour}{separator}{value.minute:02d}"
+def _replace_cell_text(cell, text: str, *, style_cell=None) -> None:
+    if not cell.paragraphs:
+        paragraph = cell.add_paragraph()
     else:
-        rendered = str(hour)
-    return rendered.translate(ARABIC_DIGITS) if arabic_digits else rendered
-
-
-def _header_range(start: time, end: time) -> str:
-    return f"{_time_12h(start, arabic_digits=True, dot=True)}-{_time_12h(end, arabic_digits=True, dot=True)}"
+        paragraph = cell.paragraphs[0]
+    style_run = _first_styled_run(style_cell) if style_cell is not None else None
+    _replace_paragraph_text(paragraph, text, style_run=style_run)
+    for extra in cell.paragraphs[1:]:
+        for run in extra.runs:
+            run.text = ""
 
 
 def _date_label(value: date) -> str:
@@ -162,11 +154,18 @@ def _date_label(value: date) -> str:
 
 
 def _title_for(first_date: date) -> str:
-    month_name = LEVANT_MONTHS[first_date.month]
     return (
         "جدول المنوبات لمدينة عامودة خلال "
-        f"شهر//{first_date.month}// {month_name} لعام {first_date.year}"
+        f"شهر//{first_date.month}// {LEVANT_MONTHS[first_date.month]} لعام {first_date.year}"
     )
+
+
+def _shift_period(shift, local_start) -> str:
+    """Prefer the smart draft's explicit slot; infer only for legacy shifts."""
+    explicit = str(getattr(shift, "period", "") or "").strip().lower()
+    if explicit in {"day", "evening"}:
+        return explicit
+    return "day" if local_start.time().replace(tzinfo=None) < time(18, 0) else "evening"
 
 
 def _group_shifts(shifts: Iterable[Shift], timezone: ZoneInfo) -> dict[date, dict[str, list[str]]]:
@@ -175,7 +174,7 @@ def _group_shifts(shifts: Iterable[Shift], timezone: ZoneInfo) -> dict[date, dic
         if not getattr(shift, "active", True):
             continue
         local_start = as_local(shift.start_at, timezone)
-        period = "day" if local_start.time().replace(tzinfo=None) < time(18, 0) else "evening"
+        period = _shift_period(shift, local_start)
         name = shift.pharmacy.name.strip()
         if name and name not in grouped[local_start.date()][period]:
             grouped[local_start.date()][period].append(name)
@@ -186,99 +185,67 @@ def _joined_names(values: list[str]) -> str:
     return " / ".join(values)
 
 
-def _configure_document(document: Document) -> None:
-    section = document.sections[0]
-    section.orientation = WD_ORIENT.PORTRAIT
-    section.page_width = Inches(8.27)
-    section.page_height = Inches(11.69)
-    section.top_margin = Inches(0.5)
-    section.bottom_margin = Inches(0.5)
-    section.left_margin = Inches(0.5)
-    section.right_margin = Inches(0.5)
-    normal = document.styles["Normal"]
-    normal.font.name = "Arial"
-    normal.font.size = Pt(12)
-
-
-def _add_title(document: Document, first_date: date) -> None:
-    paragraph = document.add_paragraph()
-    _rtl_paragraph(paragraph)
-    paragraph.paragraph_format.space_before = Pt(0)
-    paragraph.paragraph_format.space_after = Pt(5)
-    run = paragraph.add_run(_title_for(first_date))
-    run.bold = True
-    run.font.size = Pt(18)
-    run.font.color.rgb = TITLE_RED
-    run.font.name = "Arial"
-    _set_run_rtl(run)
-
-
-def _add_schedule_table(
-    document: Document,
+def _fill_page(
+    title: Paragraph,
+    table: Table,
     page_dates: list[date],
     grouped: dict[date, dict[str, list[str]]],
-    times: ShiftTimes,
 ) -> None:
-    rows_per_side = max(1, ceil(len(page_dates) / 2))
-    table = document.add_table(rows=rows_per_side + 1, cols=6)
-    table.style = "Table Grid"
-    table.autofit = True
-    tbl_pr = table._tbl.tblPr
-    if tbl_pr.find(qn("w:bidiVisual")) is None:
-        tbl_pr.append(OxmlElement("w:bidiVisual"))
-    widths = (1.574, 1.083, 1.286, 1.371, 1.051, 1.208)
-    for row in table.rows:
-        for index, cell in enumerate(row.cells):
-            cell.width = Inches(widths[index])
+    _replace_paragraph_text(title, _title_for(page_dates[0]))
 
-    header = table.rows[0]
-    header.height = Inches(0.47)
-    header.height_rule = WD_ROW_HEIGHT_RULE.AT_LEAST
-    day_header = f"النهارية:\n{_header_range(times.day_start, times.day_end)}"
-    evening_header = f"المساء:\n{_header_range(times.evening_start, times.evening_end)}"
-    for base in (0, 3):
-        _write_cell(header.cells[base], "اليوم\nوالتاريخ", size=16)
-        _write_cell(header.cells[base + 1], day_header, size=16)
-        _write_cell(header.cells[base + 2], evening_header, size=16)
+    style_cells = {
+        0: table.rows[1].cells[0],
+        1: table.rows[1].cells[1],
+        2: table.rows[1].cells[2],
+        3: table.rows[1].cells[3],
+        4: table.rows[1].cells[4],
+        5: table.rows[1].cells[5],
+    }
 
-    right_dates = page_dates[:rows_per_side]
-    left_dates = page_dates[rows_per_side:]
-    for row_index in range(rows_per_side):
+    for row_index in range(ROWS_PER_SIDE):
         row = table.rows[row_index + 1]
-        row.height = Inches(0.37)
-        row.height_rule = WD_ROW_HEIGHT_RULE.AT_LEAST
-        pairs = (
-            (0, right_dates[row_index] if row_index < len(right_dates) else None),
-            (3, left_dates[row_index] if row_index < len(left_dates) else None),
-        )
-        for base, duty_date in pairs:
-            if duty_date is None:
+        for base, date_index in ((0, row_index), (3, ROWS_PER_SIDE + row_index)):
+            if date_index >= len(page_dates):
                 for offset in range(3):
-                    _write_cell(row.cells[base + offset], "", size=12)
+                    _replace_cell_text(row.cells[base + offset], "")
                 continue
+
+            duty_date = page_dates[date_index]
             values = grouped[duty_date]
-            _write_cell(row.cells[base], _date_label(duty_date), size=12, color=DATE_BLUE)
-            _write_cell(row.cells[base + 1], _joined_names(values["day"]), size=14)
-            _write_cell(row.cells[base + 2], _joined_names(values["evening"]), size=14)
+            _replace_cell_text(
+                row.cells[base],
+                _date_label(duty_date),
+                style_cell=style_cells[base],
+            )
+            _replace_cell_text(
+                row.cells[base + 1],
+                _joined_names(values["day"]),
+                style_cell=style_cells[base + 1],
+            )
+            _replace_cell_text(
+                row.cells[base + 2],
+                _joined_names(values["evening"]),
+                style_cell=style_cells[base + 2],
+            )
 
 
-def _add_footer(document: Document, times: ShiftTimes) -> None:
-    paragraph = document.add_paragraph()
-    _rtl_paragraph(paragraph)
-    paragraph.alignment = None
-    paragraph.paragraph_format.space_before = Pt(2)
-    paragraph.paragraph_format.space_after = Pt(0)
-    text = (
-        "الدوام المسائي:"
-        f"{_time_12h(times.day_end, arabic_digits=False, always_minutes=True)} – "
-        f"{_time_12h(times.evening_start, arabic_digits=False, always_minutes=True)}"
-    )
-    run = paragraph.add_run(text)
-    run.bold = True
-    run.font.size = Pt(24)
-    run.font.color.rgb = TITLE_RED
-    run.font.name = "Arial"
-    _set_run_rtl(run)
+def _append_template_page(document, pristine, page_dates, grouped) -> None:
+    body = document._element.body
+    section_properties = body.sectPr
+
+    page_break = document.add_paragraph()
+    page_break.add_run().add_break(WD_BREAK.PAGE)
+
+    title_element = deepcopy(pristine["title"])
+    table_element = deepcopy(pristine["table"])
+    footer_element = deepcopy(pristine["footer"])
+    section_properties.addprevious(title_element)
+    section_properties.addprevious(table_element)
+    section_properties.addprevious(footer_element)
+
+    title = Paragraph(title_element, document._body)
+    table = Table(table_element, document._body)
+    _fill_page(title, table, page_dates, grouped)
 
 
 def build_official_word_schedule(
@@ -286,20 +253,37 @@ def build_official_word_schedule(
     timezone: ZoneInfo,
     times: ShiftTimes,
 ) -> bytes:
+    """Fill the user's uploaded Word layout with the smart-scheduler result.
+
+    The approved DOCX is the authoritative visual template. The scheduler remains
+    the authoritative source for pharmacy names and day/evening placement. Header,
+    footer, dimensions, borders, fonts and other visual formatting come directly
+    from the template and are not regenerated in code.
+    """
+    del times  # Displayed times stay exactly as written in the approved template.
+
     grouped = _group_shifts(shifts, timezone)
     dates = sorted(grouped)
     if not dates:
         raise WordExportError("لا توجد مناوبات قابلة للتصدير إلى Word.")
 
-    document = Document()
-    _configure_document(document)
-    for page_index, start in enumerate(range(0, len(dates), MAX_DATES_PER_PAGE)):
-        page_dates = dates[start : start + MAX_DATES_PER_PAGE]
-        if page_index:
-            document.add_page_break()
-        _add_title(document, page_dates[0])
-        _add_schedule_table(document, page_dates, grouped, times)
-        _add_footer(document, times)
+    document, title, table, _footer = _load_template()
+    _pristine_document, pristine_title, pristine_table, pristine_footer = _load_template()
+    pristine = {
+        "title": pristine_title._p,
+        "table": pristine_table._tbl,
+        "footer": pristine_footer._p,
+    }
+
+    _fill_page(title, table, dates[:MAX_DATES_PER_PAGE], grouped)
+
+    for start in range(MAX_DATES_PER_PAGE, len(dates), MAX_DATES_PER_PAGE):
+        _append_template_page(
+            document,
+            pristine,
+            dates[start : start + MAX_DATES_PER_PAGE],
+            grouped,
+        )
 
     output = BytesIO()
     document.save(output)
