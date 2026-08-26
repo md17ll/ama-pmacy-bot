@@ -6,10 +6,6 @@ from pathlib import PurePosixPath
 from typing import Any, Iterable
 from zipfile import BadZipFile, ZipFile, is_zipfile
 
-from openpyxl import Workbook, load_workbook
-from openpyxl.styles import Alignment, Font, PatternFill
-from openpyxl.utils import get_column_letter
-
 from app.utils import ParsedShift, parse_date_value, parse_time_value
 
 
@@ -100,6 +96,8 @@ def _header_map(values: list[Any], definitions: dict[str, set[str]]) -> dict[str
 
 
 def parse_shifts_workbook(data: bytes) -> list[ParsedShift]:
+    from openpyxl import load_workbook
+
     _validate_xlsx_archive(data)
     try:
         workbook = load_workbook(BytesIO(data), data_only=True, read_only=True)
@@ -150,6 +148,8 @@ def parse_shifts_workbook(data: bytes) -> list[ParsedShift]:
 
 
 def parse_pharmacies_workbook(data: bytes) -> list[dict[str, Any]]:
+    from openpyxl import load_workbook
+
     _validate_xlsx_archive(data)
     try:
         workbook = load_workbook(BytesIO(data), data_only=True, read_only=True)
@@ -196,7 +196,7 @@ def parse_pharmacies_workbook(data: bytes) -> list[dict[str, Any]]:
 
 
 def build_shifts_template() -> bytes:
-    workbook = Workbook()
+    workbook = _new_workbook()
     sheet = workbook.active
     sheet.title = "المناوبات"
     headers = ["اسم الصيدلية", "التاريخ", "وقت البداية", "وقت النهاية"]
@@ -210,7 +210,7 @@ def build_shifts_template() -> bytes:
 
 
 def build_pharmacies_template() -> bytes:
-    workbook = Workbook()
+    workbook = _new_workbook()
     sheet = workbook.active
     sheet.title = "الصيدليات"
     headers = ["اسم الصيدلية", "العنوان", "الأسماء البديلة", "الحالة", "ملاحظات"]
@@ -225,8 +225,10 @@ def build_pharmacies_template() -> bytes:
 
 def build_missing_pharmacies_template(names: Iterable[str], batch_id: int) -> bytes:
     """Create a pre-filled workbook for all unmatched pharmacy names in a draft."""
+    from openpyxl.styles import PatternFill
+
     unique_names = sorted({name.strip() for name in names if name and name.strip()})
-    workbook = Workbook()
+    workbook = _new_workbook()
     sheet = workbook.active
     sheet.title = "الصيدليات الناقصة"
     sheet.append(["اسم الصيدلية", "العنوان", "الأسماء البديلة", "الحالة", "ملاحظات"])
@@ -243,7 +245,7 @@ def build_missing_pharmacies_template(names: Iterable[str], batch_id: int) -> by
 
 
 def export_pharmacies(pharmacies: list[Any]) -> bytes:
-    workbook = Workbook()
+    workbook = _new_workbook()
     sheet = workbook.active
     sheet.title = "الصيدليات"
     sheet.append(["المعرّف", "اسم الصيدلية", "العنوان", "الأسماء البديلة", "الحالة", "ملاحظات"])
@@ -265,7 +267,7 @@ def export_pharmacies(pharmacies: list[Any]) -> bytes:
 
 
 def export_shifts(shifts: list[Any], timezone) -> bytes:
-    workbook = Workbook()
+    workbook = _new_workbook()
     sheet = workbook.active
     sheet.title = "المناوبات"
     sheet.append(["المعرّف", "اسم الصيدلية", "التاريخ", "وقت البداية", "وقت النهاية"])
@@ -305,6 +307,9 @@ def _excel_time_value(value: Any) -> str | time | datetime:
 
 
 def _style_sheet(sheet, widths: list[int]) -> None:
+    from openpyxl.styles import Alignment, Font, PatternFill
+    from openpyxl.utils import get_column_letter
+
     fill = PatternFill("solid", fgColor="198754")
     font = Font(color="FFFFFF", bold=True)
     for cell in sheet[1]:
@@ -314,3 +319,9 @@ def _style_sheet(sheet, widths: list[int]) -> None:
     for index, width in enumerate(widths, start=1):
         sheet.column_dimensions[get_column_letter(index)].width = width
     sheet.sheet_view.rightToLeft = True
+
+
+def _new_workbook():
+    from openpyxl import Workbook
+
+    return Workbook()

@@ -6,8 +6,6 @@ from dataclasses import replace
 from datetime import time
 from io import BytesIO
 
-from docx import Document
-
 from app.utils import ParsedShift, normalize_digits, parse_date_value
 
 
@@ -108,6 +106,8 @@ def parse_amuda_word_schedule(
     Header times override the supplied defaults. The defaults are used only
     when a file omits or contains an unreadable time range in its header.
     """
+    from docx import Document
+
     _validate_docx_archive(data)
     try:
         document = Document(BytesIO(data))

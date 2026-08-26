@@ -181,3 +181,13 @@ class BotSetting(Base):
     updated_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), default=lambda: datetime.now(timezone.utc), onupdate=lambda: datetime.now(timezone.utc)
     )
+
+
+class FSMRecord(Base, TimestampMixin):
+    """Persistent aiogram conversation state for restarts and serverless sleep."""
+
+    __tablename__ = "fsm_records"
+
+    storage_key: Mapped[str] = mapped_column(String(512), primary_key=True)
+    state: Mapped[str | None] = mapped_column(String(255), nullable=True)
+    data: Mapped[dict[str, Any]] = mapped_column(JSON, default=dict)

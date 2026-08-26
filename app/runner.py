@@ -11,12 +11,13 @@ from aiogram import Bot, Dispatcher
 from aiogram.client.default import DefaultBotProperties
 from aiogram.enums import ParseMode
 from aiogram.exceptions import TelegramNetworkError, TelegramServerError
-from aiogram.fsm.storage.memory import MemoryStorage
+from aiogram.fsm.storage.memory import SimpleEventIsolation
 from aiogram.types import BotCommand
 from aiogram.webhook.aiohttp_server import SimpleRequestHandler, setup_application
 
 from app.config import get_settings
 from app.db import Database
+from app.fsm_storage import DatabaseFSMStorage
 from app.handlers import (
     admin,
     admins,
@@ -72,8 +73,11 @@ async def _best_effort_telegram_call(
     return False
 
 
-def build_dispatcher() -> Dispatcher:
-    dispatcher = Dispatcher(storage=MemoryStorage())
+def build_dispatcher(db: Database) -> Dispatcher:
+    dispatcher = Dispatcher(
+        storage=DatabaseFSMStorage(db),
+        events_isolation=SimpleEventIsolation(),
+    )
     anti_spam = AntiSpamMiddleware()
     dispatcher.message.outer_middleware(anti_spam)
     dispatcher.callback_query.outer_middleware(anti_spam)
@@ -97,7 +101,7 @@ async def _prepare_database(db: Database, owner_ids: tuple[int, ...]) -> None:
         await sync_owner_admins(session, owner_ids)
 
 
-async def _configure_telegram(bot: Bot) -> None:
+async def _configure_telegram(bot: Bot, *, delete_webhook: bool) -> None:
     commands = [
         BotCommand(command="start", description="فتح البوت"),
         BotCommand(command="admin", description="لوحة الإدارة"),
@@ -107,11 +111,12 @@ async def _configure_telegram(bot: Bot) -> None:
         lambda: bot.set_my_commands(commands),
         attempts=1,
     )
-    await _best_effort_telegram_call(
-        "Deleting an old Telegram webhook",
-        lambda: bot.delete_webhook(drop_pending_updates=False),
-        attempts=1,
-    )
+    if delete_webhook:
+        await _best_effort_telegram_call(
+            "Deleting an old Telegram webhook",
+            lambda: bot.delete_webhook(drop_pending_updates=False),
+            attempts=1,
+        )
 
 
 async def run_polling() -> None:
@@ -119,7 +124,7 @@ async def run_polling() -> None:
     settings.validate_runtime()
     db = Database(settings)
     gemini_reader = GeminiScheduleReader(settings.gemini_api_key, settings.gemini_model)
-    dispatcher = build_dispatcher()
+    dispatcher = build_dispatcher(db)
     await _prepare_database(db, settings.owner_ids)
 
     retry_delay = 5
@@ -137,7 +142,7 @@ async def run_polling() -> None:
                     "Telegram API connected as @%s",
                     bot_info.username or bot_info.id,
                 )
-                await _configure_telegram(bot)
+                await _configure_telegram(bot, delete_webhook=True)
 
                 watch_task = asyncio.create_task(
                     schedule_expiry_watch(bot, db, settings)
@@ -181,14 +186,14 @@ async def run_webhook() -> None:
     db = Database(settings)
     gemini_reader = GeminiScheduleReader(settings.gemini_api_key, settings.gemini_model)
     bot = Bot(settings.bot_token, default=DefaultBotProperties(parse_mode=ParseMode.HTML))
-    dispatcher = build_dispatcher()
+    dispatcher = build_dispatcher(db)
     dispatcher.workflow_data.update(
         db=db,
         settings=settings,
         gemini_reader=gemini_reader,
     )
     await _prepare_database(db, settings.owner_ids)
-    await _configure_telegram(bot)
+    await _configure_telegram(bot, delete_webhook=False)
     await bot.set_webhook(
         settings.webhook_url,
         secret_token=settings.webhook_secret,
@@ -197,14 +202,10 @@ async def run_webhook() -> None:
     )
 
     app = web.Application()
-    watch_task = asyncio.create_task(schedule_expiry_watch(bot, db, settings))
-
     async def health(_request: web.Request) -> web.Response:
         return web.json_response({"ok": True, "service": "amuda-pharmacy-bot"})
 
     async def cleanup(_app: web.Application) -> None:
-        watch_task.cancel()
-        await asyncio.gather(watch_task, return_exceptions=True)
         await bot.session.close()
         await db.dispose()
 
