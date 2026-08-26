@@ -1083,6 +1083,225 @@ async def record_usage_event(
     await session.commit()
 
 
+async def record_activity(
+    session: AsyncSession,
+    user_id: int,
+    event: str,
+    event_data: dict[str, Any] | None = None,
+) -> None:
+    """Record an interaction and refresh last_seen in one transaction."""
+    now = utcnow()
+    await session.execute(
+        update(User)
+        .where(User.telegram_id == user_id)
+        .values(last_seen_at=now)
+    )
+    session.add(
+        UsageEvent(
+            user_id=user_id,
+            event=event,
+            event_data=event_data or {},
+            created_at=now,
+        )
+    )
+    await session.commit()
+
+
+def _since_filter(column, since: datetime | None):
+    return column >= since if since is not None else True
+
+
+async def activity_overview(
+    session: AsyncSession,
+    *,
+    since: datetime | None,
+) -> dict[str, int]:
+    active_users = int(
+        await session.scalar(
+            select(func.count())
+            .select_from(User)
+            .where(_since_filter(User.last_seen_at, since))
+        )
+        or 0
+    )
+    new_users = int(
+        await session.scalar(
+            select(func.count())
+            .select_from(User)
+            .where(_since_filter(User.first_seen_at, since))
+        )
+        or 0
+    )
+    rows = await session.execute(
+        select(UsageEvent.user_id, UsageEvent.event, UsageEvent.event_data).where(
+            _since_filter(UsageEvent.created_at, since)
+        )
+    )
+    public_click_users: set[int] = set()
+    public_clicks = 0
+    searches = 0
+    empty_searches = 0
+    for user_id, event, event_data in rows.all():
+        details = event_data or {}
+        if event == "button_click" and details.get("scope") == "user":
+            public_clicks += 1
+            public_click_users.add(int(user_id))
+        elif event == "user_search":
+            searches += 1
+            if details.get("pharmacy_id") is None:
+                empty_searches += 1
+    return {
+        "active_users": active_users,
+        "new_users": new_users,
+        "button_users": len(public_click_users),
+        "button_clicks": public_clicks,
+        "searches": searches,
+        "empty_searches": empty_searches,
+    }
+
+
+async def button_usage_statistics(
+    session: AsyncSession,
+    *,
+    since: datetime | None,
+) -> list[dict[str, Any]]:
+    rows = await session.execute(
+        select(UsageEvent.user_id, UsageEvent.event_data)
+        .where(
+            UsageEvent.event == "button_click",
+            _since_filter(UsageEvent.created_at, since),
+        )
+        .order_by(UsageEvent.created_at.desc())
+    )
+    grouped: dict[str, dict[str, Any]] = {}
+    for user_id, event_data in rows.all():
+        details = event_data or {}
+        if details.get("scope") != "user":
+            continue
+        action = str(details.get("action") or "unknown")
+        item = grouped.setdefault(
+            action,
+            {
+                "action": action,
+                "button_text": details.get("button_text"),
+                "clicks": 0,
+                "user_ids": set(),
+            },
+        )
+        item["clicks"] += 1
+        item["user_ids"].add(int(user_id))
+
+    result = []
+    for item in grouped.values():
+        result.append(
+            {
+                "action": item["action"],
+                "button_text": item["button_text"],
+                "clicks": item["clicks"],
+                "users": len(item["user_ids"]),
+            }
+        )
+    return sorted(result, key=lambda item: (-item["users"], -item["clicks"], item["action"]))
+
+
+async def list_active_users(
+    session: AsyncSession,
+    *,
+    since: datetime | None,
+    limit: int = 10,
+    offset: int = 0,
+) -> tuple[list[dict[str, Any]], int]:
+    condition = _since_filter(User.last_seen_at, since)
+    total = int(
+        await session.scalar(
+            select(func.count()).select_from(User).where(condition)
+        )
+        or 0
+    )
+    users = list(
+        await session.scalars(
+            select(User)
+            .where(condition)
+            .order_by(User.last_seen_at.desc(), User.telegram_id)
+            .limit(limit)
+            .offset(offset)
+        )
+    )
+    if not users:
+        return [], total
+
+    user_ids = [user.telegram_id for user in users]
+    event_rows = await session.execute(
+        select(UsageEvent.user_id, UsageEvent.event)
+        .where(
+            UsageEvent.user_id.in_(user_ids),
+            _since_filter(UsageEvent.created_at, since),
+        )
+    )
+    counts: dict[int, dict[str, int]] = {
+        user_id: {"buttons": 0, "messages": 0, "searches": 0}
+        for user_id in user_ids
+    }
+    for user_id, event in event_rows.all():
+        item = counts[int(user_id)]
+        if event == "button_click":
+            item["buttons"] += 1
+        elif event == "message_activity":
+            item["messages"] += 1
+        elif event == "user_search":
+            item["searches"] += 1
+
+    return [
+        {
+            "telegram_id": user.telegram_id,
+            "username": user.username,
+            "first_name": user.first_name,
+            "last_name": user.last_name,
+            "first_seen_at": user.first_seen_at,
+            "last_seen_at": user.last_seen_at,
+            "start_count": user.start_count,
+            **counts[user.telegram_id],
+        }
+        for user in users
+    ], total
+
+
+async def user_activity_details(
+    session: AsyncSession,
+    user_id: int,
+    *,
+    since: datetime | None,
+    recent_limit: int = 12,
+) -> tuple[User | None, dict[str, int], list[UsageEvent]]:
+    user = await session.get(User, user_id)
+    if user is None:
+        return None, {}, []
+    condition = _since_filter(UsageEvent.created_at, since)
+    count_rows = await session.execute(
+        select(UsageEvent.event, func.count(UsageEvent.id))
+        .where(UsageEvent.user_id == user_id, condition)
+        .group_by(UsageEvent.event)
+    )
+    counts = {str(event): int(count) for event, count in count_rows.all()}
+    events = list(
+        await session.scalars(
+            select(UsageEvent)
+            .where(
+                UsageEvent.user_id == user_id,
+                condition,
+            )
+            .order_by(UsageEvent.created_at.desc(), UsageEvent.id.desc())
+            .limit(recent_limit)
+        )
+    )
+    summary = {
+        "buttons": counts.get("button_click", 0),
+        "messages": counts.get("message_activity", 0),
+        "searches": counts.get("user_search", 0),
+    }
+    return user, summary, events
+
+
 async def usage_statistics(session: AsyncSession) -> dict[str, Any]:
     searches = int(
         await session.scalar(

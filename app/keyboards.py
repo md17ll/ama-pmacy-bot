@@ -63,10 +63,6 @@ def admin_home() -> InlineKeyboardMarkup:
     return keyboard(
         [
             [button("✨ إدخال جدول جديد", cb.ADMIN_IMPORT, ButtonStyle.PRIMARY)],
-            [
-                button("📷 قراءة صورة بـ GPT-5.4 Mini", cb.ADMIN_IMPORT_GEMINI, ButtonStyle.PRIMARY),
-                button("📊 رفع ملف Excel", cb.ADMIN_IMPORT_EXCEL, ButtonStyle.PRIMARY),
-            ],
             [button("📄 رفع جدول Word", cb.ADMIN_IMPORT_WORD, ButtonStyle.SUCCESS)],
             [button("📝 المسودات", cb.ADMIN_DRAFTS)],
             [
@@ -93,11 +89,98 @@ def admin_import() -> InlineKeyboardMarkup:
     return keyboard(
         [
             [button("📄 رفع جدول Word الرسمي", cb.ADMIN_IMPORT_WORD, ButtonStyle.SUCCESS)],
-            [button("📷 قراءة صورة بواسطة GPT-5.4 Mini", cb.ADMIN_IMPORT_GEMINI, ButtonStyle.PRIMARY)],
-            [button("📊 رفع ملف Excel", cb.ADMIN_IMPORT_EXCEL, ButtonStyle.PRIMARY)],
             [button("✍️ إضافة مناوبة يدوياً", cb.ADMIN_IMPORT_MANUAL, ButtonStyle.SUCCESS)],
-            [button("📥 تنزيل نموذج Excel", cb.ADMIN_TEMPLATE_SHIFTS)],
             [button("⬅️ رجوع", cb.ADMIN_HOME)],
+        ]
+    )
+
+
+def admin_statistics() -> InlineKeyboardMarkup:
+    return keyboard(
+        [
+            [
+                button("👆 تفاصيل الأزرار", "a:stats:buttons:7", ButtonStyle.PRIMARY),
+                button("👥 الأعضاء النشطون", "a:stats:active:7:0", ButtonStyle.PRIMARY),
+            ],
+            [button("🔄 تحديث الإحصائيات", cb.ADMIN_STATS, ButtonStyle.SUCCESS)],
+            [button("⬅️ رجوع", cb.ADMIN_HOME)],
+        ]
+    )
+
+
+def statistics_periods(section: str, selected_days: int) -> InlineKeyboardMarkup:
+    def period_button(label: str, days: int) -> InlineKeyboardButton:
+        prefix = "✅ " if selected_days == days else ""
+        return button(f"{prefix}{label}", f"a:stats:{section}:{days}:0")
+
+    return keyboard(
+        [
+            [
+                period_button("اليوم", 1),
+                period_button("7 أيام", 7),
+                period_button("30 يومًا", 30),
+            ],
+            [period_button("كل الوقت", 0)],
+            [button("⬅️ رجوع للإحصائيات", cb.ADMIN_STATS)],
+        ]
+    )
+
+
+def active_users_statistics(
+    users: list[dict[str, object]],
+    *,
+    selected_days: int,
+    page: int,
+    total: int,
+    page_size: int,
+) -> InlineKeyboardMarkup:
+    rows: list[list[InlineKeyboardButton]] = [
+        [
+            button(
+                f"{'✅ ' if selected_days == days else ''}{label}",
+                f"a:stats:active:{days}:0",
+            )
+            for label, days in (("اليوم", 1), ("7 أيام", 7), ("30 يومًا", 30))
+        ],
+        [
+            button(
+                f"{'✅ ' if selected_days == 0 else ''}كل الوقت",
+                "a:stats:active:0:0",
+            )
+        ],
+    ]
+    for item in users:
+        name = " ".join(
+            part for part in (str(item.get("first_name") or ""), str(item.get("last_name") or "")) if part
+        ).strip()
+        if not name:
+            name = str(item.get("username") or item["telegram_id"])
+        rows.append(
+            [
+                button(
+                    f"👤 {name[:36]}",
+                    f"a:stats:user:{item['telegram_id']}:{selected_days}:{page}",
+                    ButtonStyle.PRIMARY,
+                )
+            ]
+        )
+
+    nav: list[InlineKeyboardButton] = []
+    if page > 0:
+        nav.append(button("◀️ السابق", f"a:stats:active:{selected_days}:{page - 1}"))
+    if (page + 1) * page_size < total:
+        nav.append(button("التالي ▶️", f"a:stats:active:{selected_days}:{page + 1}"))
+    if nav:
+        rows.append(nav)
+    rows.append([button("⬅️ رجوع للإحصائيات", cb.ADMIN_STATS)])
+    return keyboard(rows)
+
+
+def user_activity_statistics(*, selected_days: int, page: int) -> InlineKeyboardMarkup:
+    return keyboard(
+        [
+            [button("⬅️ رجوع للأعضاء", f"a:stats:active:{selected_days}:{page}")],
+            [button("📊 رجوع للإحصائيات", cb.ADMIN_STATS)],
         ]
     )
 

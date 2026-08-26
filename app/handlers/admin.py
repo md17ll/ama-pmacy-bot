@@ -12,10 +12,79 @@ from app.config import Settings
 from app.db import Database
 from app.handlers.common import require_admin, require_writer
 from app.telegram_utils import answer_callback, safe_edit
-from app.utils import format_date_ar, format_duration, format_time_ar, utcnow
+from app.utils import (
+    as_local,
+    format_date_ar,
+    format_datetime_ar,
+    format_duration,
+    format_time_ar,
+    html,
+    local_day_bounds,
+    utcnow,
+)
 
 
 router = Router(name="admin")
+ACTIVE_USERS_PAGE_SIZE = 8
+
+BUTTON_NAMES = {
+    cb.USER_HOME: "الرجوع للواجهة الرئيسية",
+    cb.USER_NOW: "الصيدليات المناوبة الآن",
+    cb.USER_TODAY: "صيدليات اليوم",
+    cb.USER_TOMORROW: "صيدليات غداً",
+    cb.USER_SEARCH: "البحث عن صيدلية",
+    cb.USER_REFRESH: "تحديث الوقت",
+    "u:pinfo": "فتح بيانات صيدلية",
+}
+
+EVENT_NAMES = {
+    "start": "فتح البوت /start",
+    "view_now": "عرض المناوبة الآن",
+    "view_today": "عرض صيدليات اليوم",
+    "view_tomorrow": "عرض صيدليات غداً",
+    "user_search": "تنفيذ بحث",
+    "message_activity": "إرسال رسالة أو ملف",
+}
+
+
+def _activity_since(days: int, settings: Settings):
+    now = utcnow()
+    if days == 0:
+        return None
+    if days == 1:
+        return local_day_bounds(now.astimezone(settings.timezone).date(), settings.timezone)[0]
+    return now - timedelta(days=days)
+
+
+def _period_name(days: int) -> str:
+    return {1: "اليوم", 7: "آخر 7 أيام", 30: "آخر 30 يومًا", 0: "كل الوقت"}.get(
+        days,
+        "آخر 7 أيام",
+    )
+
+
+def _valid_days(value: str) -> int:
+    try:
+        days = int(value)
+    except ValueError:
+        return 7
+    return days if days in {0, 1, 7, 30} else 7
+
+
+def _user_name(user) -> str:
+    name = " ".join(part for part in (user.first_name, user.last_name) if part).strip()
+    return name or (f"@{user.username}" if user.username else str(user.telegram_id))
+
+
+def _activity_event_name(event) -> str:
+    if event.event == "button_click":
+        details = event.event_data or {}
+        action = str(details.get("action") or "")
+        return f"ضغط زر: {BUTTON_NAMES.get(action, details.get('button_text') or action or 'زر')}"
+    if event.event == "user_search":
+        found = (event.event_data or {}).get("pharmacy_id") is not None
+        return "بحث ناجح" if found else "بحث بدون نتيجة"
+    return EVENT_NAMES.get(event.event, event.event)
 
 
 async def _render_admin_home(target: CallbackQuery | Message, db: Database, settings: Settings) -> None:
@@ -56,16 +125,31 @@ async def admin_import_menu(callback: CallbackQuery, db: Database) -> None:
         callback,
         texts.admin_section_text(
             "إدخال جدول جديد",
-            "اختر طريقة إدخال المناوبات. Excel هو الأدق، وGPT-5.4 Mini مناسب عندما يصلك الجدول على شكل صورة. كل نتيجة تُحفظ كمسودة ولا تُنشر تلقائياً.",
+            "اختر طريقة إدخال المناوبات. يمكنك رفع جدول Word الرسمي أو إضافة مناوبة واحدة يدوياً. كل نتيجة تُراجع قبل نشرها.",
             stats=[
-                "📷 GPT-5.4 Mini: قراءة الصورة واستخراج الاسم والتاريخ والوقت.",
-                "📊 Excel: فحص الأعمدة والصفوف قبل الحفظ.",
+                "📄 Word: قراءة الجدول الرسمي وحفظه كمسودة.",
                 "✍️ يدوي: إضافة مناوبة واحدة عند الحاجة.",
             ],
         ),
         keyboards.admin_import(),
     )
     await answer_callback(callback)
+
+
+@router.callback_query(
+    F.data.in_({cb.ADMIN_IMPORT_GEMINI, cb.ADMIN_IMPORT_EXCEL, cb.ADMIN_TEMPLATE_SHIFTS})
+)
+async def removed_import_feature(callback: CallbackQuery, db: Database) -> None:
+    if await require_admin(callback, db) is None:
+        return
+    await answer_callback(callback, "تم حذف هذه الميزة من البوت.", alert=True)
+
+
+@router.callback_query(F.data.startswith("a:smart"))
+async def removed_smart_schedule_feature(callback: CallbackQuery, db: Database) -> None:
+    if await require_admin(callback, db) is None:
+        return
+    await answer_callback(callback, "تم حذف مولّد الجداول الذكي من البوت.", alert=True)
 
 
 @router.callback_query(F.data == cb.ADMIN_SHIFTS)
@@ -241,16 +325,31 @@ async def admin_stats(callback: CallbackQuery, db: Database, settings: Settings)
     async with db.session_factory() as session:
         stats = await repositories.statistics(session)
         usage = await repositories.usage_statistics(session)
+        today = await repositories.activity_overview(
+            session,
+            since=_activity_since(1, settings),
+        )
+        week = await repositories.activity_overview(
+            session,
+            since=_activity_since(7, settings),
+        )
     latest = stats["latest_shift_end"]
     lines = [
         f"👥 المستخدمون: {stats['users']}",
+        f"🟢 النشطون اليوم: {today['active_users']}",
+        f"📆 النشطون آخر 7 أيام: {week['active_users']}",
+        f"🆕 أعضاء جدد اليوم: {today['new_users']}",
+        f"👆 أشخاص ضغطوا الأزرار اليوم: {today['button_users']}",
+        f"🔘 مجموع ضغطات اليوم: {today['button_clicks']}",
+        f"🔍 عمليات البحث اليوم: {today['searches']}",
+        f"❌ بحث بدون نتيجة اليوم: {today['empty_searches']}",
         f"🏥 الصيدليات: {stats['pharmacies']}",
         f"📅 المناوبات النشطة: {stats['shifts']}",
         f"📝 المسودات: {stats['drafts']}",
         f"⚠️ الأخطاء: {stats['errors']}",
         f"👤 الإداريون: {stats['admins']}",
         f"🚀 مرات الضغط على Start: {usage['starts']}",
-        f"🔍 عمليات البحث: {usage['searches']}",
+        f"🔍 كل عمليات البحث: {usage['searches']}",
     ]
     if usage["popular_actions"]:
         action_names = {
@@ -263,7 +362,7 @@ async def admin_stats(callback: CallbackQuery, db: Database, settings: Settings)
         lines.append(f"⭐ الأكثر استخداماً: {action_names.get(top_action, top_action)} ({top_count})")
     if latest:
         lines.append(
-            f"🕐 آخر مناوبة: {format_date_ar(latest, settings.timezone)}، {format_time_ar(latest, settings.timezone)}"
+            f"🕐 أبعد مناوبة مجدولة: {format_date_ar(latest, settings.timezone)}، {format_time_ar(latest, settings.timezone)}"
         )
     await safe_edit(
         callback,
@@ -272,7 +371,151 @@ async def admin_stats(callback: CallbackQuery, db: Database, settings: Settings)
             "ملخص سريع لحالة البوت وقاعدة البيانات. هذه البيانات لا تظهر للمستخدمين.",
             stats=lines,
         ),
-        keyboards.simple_back(cb.ADMIN_HOME),
+        keyboards.admin_statistics(),
+    )
+    await answer_callback(callback)
+
+
+@router.callback_query(F.data.startswith("a:stats:buttons:"))
+async def admin_button_statistics(callback: CallbackQuery, db: Database, settings: Settings) -> None:
+    if await require_admin(callback, db) is None:
+        return
+    parts = (callback.data or "").split(":")
+    days = _valid_days(parts[3] if len(parts) > 3 else "7")
+    async with db.session_factory() as session:
+        items = await repositories.button_usage_statistics(
+            session,
+            since=_activity_since(days, settings),
+        )
+        overview = await repositories.activity_overview(
+            session,
+            since=_activity_since(days, settings),
+        )
+    lines = [
+        f"👥 أشخاص مختلفون: {overview['button_users']}",
+        f"🔘 مجموع الضغطات: {overview['button_clicks']}",
+    ]
+    for item in items[:15]:
+        name = BUTTON_NAMES.get(str(item["action"])) or str(item["button_text"] or item["action"])
+        lines.append(f"• {html(name)}: {item['users']} شخص — {item['clicks']} ضغطة")
+    if not items:
+        lines.append("ℹ️ لا توجد ضغطات مسجلة في هذه الفترة.")
+    await safe_edit(
+        callback,
+        texts.admin_section_text(
+            f"تفاعل الأزرار — {_period_name(days)}",
+            "يعرض عدد الأشخاص المختلفين وإجمالي الضغطات على أزرار المستخدمين. يبدأ السجل التفصيلي من نشر هذا التحديث.",
+            stats=lines,
+        ),
+        keyboards.statistics_periods("buttons", days),
+    )
+    await answer_callback(callback)
+
+
+@router.callback_query(F.data.startswith("a:stats:active:"))
+async def admin_active_users(callback: CallbackQuery, db: Database, settings: Settings) -> None:
+    if await require_admin(callback, db) is None:
+        return
+    parts = (callback.data or "").split(":")
+    days = _valid_days(parts[3] if len(parts) > 3 else "7")
+    try:
+        page = max(0, int(parts[4] if len(parts) > 4 else "0"))
+    except ValueError:
+        page = 0
+    async with db.session_factory() as session:
+        users, total = await repositories.list_active_users(
+            session,
+            since=_activity_since(days, settings),
+            limit=ACTIVE_USERS_PAGE_SIZE,
+            offset=page * ACTIVE_USERS_PAGE_SIZE,
+        )
+    if page and not users:
+        page = 0
+        async with db.session_factory() as session:
+            users, total = await repositories.list_active_users(
+                session,
+                since=_activity_since(days, settings),
+                limit=ACTIVE_USERS_PAGE_SIZE,
+                offset=0,
+            )
+    lines = [f"👥 العدد: {total}"]
+    for index, item in enumerate(users, start=page * ACTIVE_USERS_PAGE_SIZE + 1):
+        name = " ".join(
+            part for part in (str(item.get("first_name") or ""), str(item.get("last_name") or "")) if part
+        ).strip() or str(item.get("username") or item["telegram_id"])
+        last_seen = format_datetime_ar(item["last_seen_at"], settings.timezone)
+        lines.append(
+            f"{index}. {html(name)} — {last_seen}\n"
+            f"   👆 {item['buttons']} ضغطات • 💬 {item['messages']} رسائل • 🔍 {item['searches']} بحث"
+        )
+    if not users:
+        lines.append("ℹ️ لا يوجد أعضاء نشطون في هذه الفترة.")
+    await safe_edit(
+        callback,
+        texts.admin_section_text(
+            f"الأعضاء النشطون — {_period_name(days)}",
+            "النشط هو من تفاعل مع البوت خلال الفترة. اضغط على اسمه لفتح سجله.",
+            stats=lines,
+        ),
+        keyboards.active_users_statistics(
+            users,
+            selected_days=days,
+            page=page,
+            total=total,
+            page_size=ACTIVE_USERS_PAGE_SIZE,
+        ),
+    )
+    await answer_callback(callback)
+
+
+@router.callback_query(F.data.startswith("a:stats:user:"))
+async def admin_user_activity(callback: CallbackQuery, db: Database, settings: Settings) -> None:
+    if await require_admin(callback, db) is None:
+        return
+    parts = (callback.data or "").split(":")
+    try:
+        user_id = int(parts[3])
+        days = _valid_days(parts[4])
+        page = max(0, int(parts[5]))
+    except (IndexError, ValueError):
+        await answer_callback(callback, "تعذر فتح سجل العضو.", alert=True)
+        return
+    async with db.session_factory() as session:
+        user, summary, events = await repositories.user_activity_details(
+            session,
+            user_id,
+            since=_activity_since(days, settings),
+        )
+    if user is None:
+        await answer_callback(callback, "العضو غير موجود.", alert=True)
+        return
+    username = f"@{html(user.username)}" if user.username else "غير موجود"
+    lines = [
+        f"🪪 الاسم: {html(_user_name(user))}",
+        f"🔗 المعرف: {username}",
+        f"🆔 Telegram ID: <code>{user.telegram_id}</code>",
+        f"📅 أول استخدام: {format_datetime_ar(user.first_seen_at, settings.timezone)}",
+        f"🕐 آخر نشاط: {format_datetime_ar(user.last_seen_at, settings.timezone)}",
+        f"🚀 مرات Start: {user.start_count}",
+        f"👆 الضغطات: {summary['buttons']}",
+        f"💬 الرسائل: {summary['messages']}",
+        f"🔍 عمليات البحث: {summary['searches']}",
+    ]
+    if events:
+        lines.append("\n🧾 آخر العمليات:")
+        for event in events:
+            local = as_local(event.created_at, settings.timezone)
+            lines.append(f"• {local:%d/%m %H:%M} — {html(_activity_event_name(event))}")
+    else:
+        lines.append("\nℹ️ لا توجد عمليات تفصيلية مسجلة في هذه الفترة.")
+    await safe_edit(
+        callback,
+        texts.admin_section_text(
+            f"سجل العضو — {_period_name(days)}",
+            "هذا السجل ظاهر للإدارة فقط.",
+            stats=lines,
+        ),
+        keyboards.user_activity_statistics(selected_days=days, page=page),
     )
     await answer_callback(callback)
 
