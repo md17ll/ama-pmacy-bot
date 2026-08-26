@@ -1,9 +1,11 @@
 from __future__ import annotations
 
 from collections.abc import AsyncIterator
+from typing import Any
 
 from sqlalchemy import event
 from sqlalchemy.ext.asyncio import AsyncEngine, AsyncSession, async_sessionmaker, create_async_engine
+from sqlalchemy.pool import NullPool
 
 from app.config import Settings
 from app.models import Base
@@ -12,10 +14,17 @@ from app.models import Base
 class Database:
     def __init__(self, settings: Settings):
         connect_args = {"check_same_thread": False} if settings.database_url.startswith("sqlite") else {}
+        engine_options: dict[str, Any] = {
+            "pool_pre_ping": True,
+            "connect_args": connect_args,
+        }
+        if settings.run_mode == "webhook" and settings.database_url.startswith("postgresql"):
+            # A persistent PostgreSQL pool emits background network traffic and
+            # prevents Railway Serverless from considering the service idle.
+            engine_options["poolclass"] = NullPool
         self.engine: AsyncEngine = create_async_engine(
             settings.database_url,
-            pool_pre_ping=True,
-            connect_args=connect_args,
+            **engine_options,
         )
         self.session_factory = async_sessionmaker(
             self.engine, expire_on_commit=False, class_=AsyncSession

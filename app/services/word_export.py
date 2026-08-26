@@ -7,17 +7,16 @@ from copy import deepcopy
 from datetime import date, time
 from io import BytesIO
 from pathlib import Path
-from typing import Iterable
+from typing import TYPE_CHECKING, Iterable
 from zoneinfo import ZoneInfo
-
-from docx import Document
-from docx.enum.text import WD_BREAK
-from docx.table import Table
-from docx.text.paragraph import Paragraph
 
 from app.models import Shift
 from app.services.shift_schedule_tools import ShiftTimes
 from app.utils import as_local
+
+if TYPE_CHECKING:
+    from docx.table import Table
+    from docx.text.paragraph import Paragraph
 
 
 MAX_DATES_PER_PAGE = 38
@@ -94,6 +93,8 @@ def template_bytes() -> bytes:
 
 
 def _load_template():
+    from docx import Document
+
     document = Document(BytesIO(template_bytes()))
     if len(document.tables) != 1:
         raise WordExportError("قالب Word الرسمي غير صالح: يجب أن يحتوي جدولاً واحداً.")
@@ -230,6 +231,10 @@ def _fill_page(
 
 
 def _append_template_page(document, pristine, page_dates, grouped) -> None:
+    from docx.enum.text import WD_BREAK
+    from docx.table import Table
+    from docx.text.paragraph import Paragraph
+
     body = document._element.body
     section_properties = body.sectPr
 

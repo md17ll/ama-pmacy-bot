@@ -19,7 +19,7 @@ async def schedule_expiry_watch(bot: Bot, db: Database, settings: Settings) -> N
     """Send one schedule-expiry alert per local day to owners/admins."""
     while True:
         try:
-            await _check_once(bot, db, settings)
+            await check_schedule_expiry(bot, db, settings)
         except asyncio.CancelledError:
             raise
         except Exception:
@@ -27,7 +27,7 @@ async def schedule_expiry_watch(bot: Bot, db: Database, settings: Settings) -> N
         await asyncio.sleep(3600)
 
 
-async def _check_once(bot: Bot, db: Database, settings: Settings) -> None:
+async def check_schedule_expiry(bot: Bot, db: Database, settings: Settings) -> None:
     now = utcnow()
     local_today = now.astimezone(settings.timezone).date()
     key = "schedule_expiry_last_alert_date"
