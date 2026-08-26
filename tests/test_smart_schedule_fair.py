@@ -6,6 +6,7 @@ from zoneinfo import ZoneInfo
 
 import app.handlers  # noqa: F401 - activates smart scheduler patches
 from app.services import smart_schedule as smart
+from app.services import smart_schedule_fair_patch as _smart_schedule_fair_patch  # noqa: F401
 from app.services.shift_schedule_tools import ShiftTimes
 
 

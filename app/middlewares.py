@@ -1,12 +1,95 @@
 from __future__ import annotations
 
 import asyncio
+import logging
 from collections.abc import Awaitable, Callable
 from time import monotonic
 from typing import Any
 
 from aiogram import BaseMiddleware
 from aiogram.types import CallbackQuery, Message, TelegramObject
+
+from app import repositories
+
+
+logger = logging.getLogger(__name__)
+
+
+def _button_text(callback: CallbackQuery) -> str | None:
+    markup = getattr(callback.message, "reply_markup", None)
+    if markup is None:
+        return None
+    for row in markup.inline_keyboard:
+        for item in row:
+            if item.callback_data == callback.data:
+                return item.text[:128]
+    return None
+
+
+def _button_action(callback_data: str) -> tuple[str, str]:
+    if callback_data.startswith("u:pinfo:"):
+        return "u:pinfo", "user"
+    if callback_data.startswith("u:"):
+        return callback_data[:64], "user"
+    return callback_data[:64], "admin"
+
+
+def _message_kind(message: Message) -> str:
+    if message.photo:
+        return "photo"
+    if message.document:
+        return "document"
+    if message.location:
+        return "location"
+    if message.contact:
+        return "contact"
+    return "text" if message.text else "other"
+
+
+class ActivityTrackingMiddleware(BaseMiddleware):
+    """Persist accepted interactions without changing handler behavior."""
+
+    async def __call__(
+        self,
+        handler: Callable[[TelegramObject, dict[str, Any]], Awaitable[Any]],
+        event: TelegramObject,
+        data: dict[str, Any],
+    ) -> Any:
+        user = getattr(event, "from_user", None)
+        db = data.get("db")
+        if user is not None and db is not None:
+            event_name: str | None = None
+            event_data: dict[str, Any] = {}
+            if isinstance(event, CallbackQuery) and event.data:
+                action, scope = _button_action(event.data)
+                event_name = "button_click"
+                event_data = {
+                    "action": action,
+                    "callback_data": event.data[:128],
+                    "button_text": _button_text(event),
+                    "scope": scope,
+                }
+            elif isinstance(event, Message):
+                command = (event.text or "").split(maxsplit=1)[0].split("@", maxsplit=1)[0]
+                # /start already updates last_seen and records its own usage event.
+                if command != "/start":
+                    event_name = "message_activity"
+                    event_data = {"kind": _message_kind(event)}
+
+            if event_name:
+                try:
+                    async with db.session_factory() as session:
+                        await repositories.record_activity(
+                            session,
+                            user.id,
+                            event_name,
+                            event_data,
+                        )
+                except Exception as exc:
+                    # Statistics must never interrupt the bot's real workflows.
+                    logger.warning("Unable to record usage activity: %s", exc)
+
+        return await handler(event, data)
 
 
 class AntiSpamMiddleware(BaseMiddleware):

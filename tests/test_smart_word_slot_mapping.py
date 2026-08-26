@@ -9,6 +9,7 @@ from docx import Document
 
 import app.handlers  # noqa: F401 - installs the smart Word slot binding
 from app.handlers import smart_schedules as smart_ui
+from app.handlers import smart_schedule_word_slot_patch as _smart_schedule_word_slot_patch  # noqa: F401
 from app.services.shift_schedule_tools import ShiftTimes
 from app.services.word_export import build_official_word_schedule
 

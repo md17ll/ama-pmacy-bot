@@ -30,9 +30,8 @@ from app.handlers import (
     user,
     word_imports,
 )
-from app.middlewares import AntiSpamMiddleware
+from app.middlewares import ActivityTrackingMiddleware, AntiSpamMiddleware
 from app.repositories import sync_owner_admins
-from app.services.gemini import GeminiScheduleReader
 from app.services.scheduler import schedule_expiry_watch
 
 
@@ -81,6 +80,9 @@ def build_dispatcher(db: Database) -> Dispatcher:
     anti_spam = AntiSpamMiddleware()
     dispatcher.message.outer_middleware(anti_spam)
     dispatcher.callback_query.outer_middleware(anti_spam)
+    activity_tracking = ActivityTrackingMiddleware()
+    dispatcher.message.outer_middleware(activity_tracking)
+    dispatcher.callback_query.outer_middleware(activity_tracking)
 
     dispatcher.include_router(premium.router)
     dispatcher.include_router(missing_pharmacies.router)
@@ -123,7 +125,6 @@ async def run_polling() -> None:
     settings = get_settings()
     settings.validate_runtime()
     db = Database(settings)
-    gemini_reader = GeminiScheduleReader(settings.gemini_api_key, settings.gemini_model)
     dispatcher = build_dispatcher(db)
     await _prepare_database(db, settings.owner_ids)
 
@@ -153,7 +154,6 @@ async def run_polling() -> None:
                     bot,
                     db=db,
                     settings=settings,
-                    gemini_reader=gemini_reader,
                     allowed_updates=dispatcher.resolve_used_update_types(),
                     handle_signals=False,
                     close_bot_session=False,
@@ -184,13 +184,11 @@ async def run_webhook() -> None:
     settings = get_settings()
     settings.validate_runtime()
     db = Database(settings)
-    gemini_reader = GeminiScheduleReader(settings.gemini_api_key, settings.gemini_model)
     bot = Bot(settings.bot_token, default=DefaultBotProperties(parse_mode=ParseMode.HTML))
     dispatcher = build_dispatcher(db)
     dispatcher.workflow_data.update(
         db=db,
         settings=settings,
-        gemini_reader=gemini_reader,
     )
     await _prepare_database(db, settings.owner_ids)
     await _configure_telegram(bot, delete_webhook=False)

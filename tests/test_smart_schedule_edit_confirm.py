@@ -41,11 +41,10 @@ def test_second_confirmed_edit_does_not_replace_generator_baseline() -> None:
     assert data["generated_pharmacy_name"] == "صيدلية المولّد"
 
 
-def test_confirmation_handler_is_registered_before_legacy_immediate_pick_handler() -> None:
+def test_removed_smart_handlers_are_not_registered_at_runtime() -> None:
     init_source = Path("app/handlers/__init__.py").read_text(encoding="utf-8")
-    confirm_position = init_source.index("smart_schedule_edit_confirm")
-    legacy_position = init_source.index("from . import smart_schedules")
-    assert confirm_position < legacy_position
+    assert "smart_schedule_edit_confirm" not in init_source
+    assert "from . import smart_schedules" not in init_source
 
 
 def test_pick_requires_savepick_confirmation_button_in_source() -> None:
