@@ -44,17 +44,22 @@ def active_users_statistics(
             )
             if part
         ).strip()
+        username = str(item.get("username") or "").strip().lstrip("@")
         if not name:
-            name = str(item.get("username") or item["telegram_id"])
+            name = username or str(item["telegram_id"])
 
-        # URL buttons do not support Telegram's style field. Supplying both can
-        # make send/editMessageReplyMarkup fail and prevents the active-users
-        # screen from opening.
+        # Prefer a normal Telegram username link when one exists. For users
+        # without a public username, fall back to Telegram's numeric ID link.
+        profile_url = (
+            f"https://t.me/{username}"
+            if username
+            else f"tg://user?id={int(item['telegram_id'])}"
+        )
         rows.append(
             [
                 InlineKeyboardButton(
                     text=f"👤 {name[:36]}",
-                    url=f"tg://user?id={int(item['telegram_id'])}",
+                    url=profile_url,
                 )
             ]
         )
