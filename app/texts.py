@@ -137,6 +137,25 @@ def admin_section_text(
 ) -> str:
     lines = [f"⚙️ <b>لوحة الإدارة › {html(breadcrumb)}</b>", "", description]
     stats = list(stats)
+
+    # In the member activity record, make the displayed name itself a Telegram
+    # profile link. This uses the numeric Telegram ID, so no public @username is
+    # required. Keeping it in the message text avoids touching the working
+    # active-users keyboard/callback flow.
+    if breadcrumb.startswith("سجل العضو"):
+        telegram_id = ""
+        for item in stats:
+            if item.startswith("🆔 Telegram ID: <code>") and item.endswith("</code>"):
+                telegram_id = item.removeprefix("🆔 Telegram ID: <code>").removesuffix("</code>").strip()
+                break
+        if telegram_id.isdigit():
+            for index, item in enumerate(stats):
+                prefix = "🪪 الاسم: "
+                if item.startswith(prefix):
+                    name = item[len(prefix):]
+                    stats[index] = f'{prefix}<a href="tg://user?id={telegram_id}">{name}</a>'
+                    break
+
     if stats:
         lines.extend(["", *stats])
     if warning:
