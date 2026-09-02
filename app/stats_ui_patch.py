@@ -35,9 +35,6 @@ def active_users_statistics(
         ],
     ]
 
-    # Keep the same transparent-looking name rows, but make each name a Telegram
-    # deep-link. This works without a public @username for users Telegram allows
-    # the bot/admin to resolve by numeric user id.
     for item in users:
         name = " ".join(
             part
@@ -49,12 +46,15 @@ def active_users_statistics(
         ).strip()
         if not name:
             name = str(item.get("username") or item["telegram_id"])
+
+        # URL buttons do not support Telegram's style field. Supplying both can
+        # make send/editMessageReplyMarkup fail and prevents the active-users
+        # screen from opening.
         rows.append(
             [
                 InlineKeyboardButton(
                     text=f"👤 {name[:36]}",
                     url=f"tg://user?id={int(item['telegram_id'])}",
-                    style=ButtonStyle.PRIMARY,
                 )
             ]
         )
