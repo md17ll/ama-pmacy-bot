@@ -3,6 +3,7 @@ from __future__ import annotations
 from io import BytesIO
 
 from aiogram import Bot, F, Router
+from aiogram.filters import StateFilter
 from aiogram.fsm.context import FSMContext
 from aiogram.types import CallbackQuery, Message
 
@@ -143,3 +144,15 @@ async def word_receive_document(
 @router.message(AdminImportState.waiting_word)
 async def word_wrong_input(message: Message) -> None:
     await message.answer("أرسل ملف جدول Word بصيغة docx.")
+
+
+@router.message(StateFilter(None), F.document.file_name.lower().endswith(".docx"))
+async def word_receive_document_fallback(
+    message: Message,
+    bot: Bot,
+    db: Database,
+    settings: Settings,
+    state: FSMContext,
+) -> None:
+    """Process a DOCX from a writer if the temporary Word-upload state was lost."""
+    await word_receive_document(message, bot, db, settings, state)
