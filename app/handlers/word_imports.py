@@ -3,7 +3,7 @@ from __future__ import annotations
 from io import BytesIO
 
 from aiogram import Bot, F, Router
-from aiogram.filters import StateFilter
+from aiogram.filters import BaseFilter, StateFilter
 from aiogram.fsm.context import FSMContext
 from aiogram.types import CallbackQuery, Message
 
@@ -20,6 +20,12 @@ from app.telegram_utils import answer_callback, safe_edit, try_delete
 
 
 router = Router(name="word_imports")
+
+
+class DocxDocumentFilter(BaseFilter):
+    async def __call__(self, message: Message) -> bool:
+        document = message.document
+        return bool(document and (document.file_name or "").lower().endswith(".docx"))
 
 
 async def _download_file(bot: Bot, file_id: str) -> bytes:
@@ -146,7 +152,7 @@ async def word_wrong_input(message: Message) -> None:
     await message.answer("أرسل ملف جدول Word بصيغة docx.")
 
 
-@router.message(StateFilter(None), F.document.file_name.lower().endswith(".docx"))
+@router.message(StateFilter(None), DocxDocumentFilter())
 async def word_receive_document_fallback(
     message: Message,
     bot: Bot,
