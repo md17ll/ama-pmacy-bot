@@ -20,7 +20,8 @@ def test_docx_fallback_filter_accepts_docx_only() -> None:
     asyncio.run(scenario())
 
 
-def test_docx_fallback_is_not_limited_to_empty_fsm_state() -> None:
+def test_docx_handler_has_priority_over_waiting_word_catchall() -> None:
     source = inspect.getsource(word_imports)
-    assert "StateFilter(None)" not in source
-    assert "@router.message(DocxDocumentFilter())" in source
+    docx_handler = source.index("@router.message(DocxDocumentFilter())")
+    wrong_input_handler = source.index("@router.message(AdminImportState.waiting_word)")
+    assert docx_handler < wrong_input_handler
