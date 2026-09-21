@@ -46,6 +46,13 @@ def _message_kind(message: Message) -> str:
     return "text" if message.text else "other"
 
 
+def _message_command(message: Message) -> str:
+    text = (message.text or "").strip()
+    if not text:
+        return ""
+    return text.split(maxsplit=1)[0].split("@", maxsplit=1)[0]
+
+
 class ActivityTrackingMiddleware(BaseMiddleware):
     """Persist accepted interactions without changing handler behavior."""
 
@@ -70,7 +77,7 @@ class ActivityTrackingMiddleware(BaseMiddleware):
                     "scope": scope,
                 }
             elif isinstance(event, Message):
-                command = (event.text or "").split(maxsplit=1)[0].split("@", maxsplit=1)[0]
+                command = _message_command(event)
                 # /start already updates last_seen and records its own usage event.
                 if command != "/start":
                     event_name = "message_activity"
