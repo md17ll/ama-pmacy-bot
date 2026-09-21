@@ -65,7 +65,7 @@ async def word_prompt(callback: CallbackQuery, db: Database, state: FSMContext) 
     await answer_callback(callback)
 
 
-@router.message(AdminImportState.waiting_word, F.document)
+@router.message(DocxDocumentFilter())
 async def word_receive_document(
     message: Message,
     bot: Bot,
@@ -77,9 +77,6 @@ async def word_receive_document(
         return
     document = message.document
     filename = document.file_name or "amuda_schedule.docx"
-    if not filename.lower().endswith(".docx"):
-        await message.answer("الملف يجب أن يكون بصيغة docx.")
-        return
     if document.file_size and document.file_size > MAX_DOCX_BYTES:
         await message.answer("حجم ملف Word أكبر من الحد المسموح.")
         return
@@ -150,15 +147,3 @@ async def word_receive_document(
 @router.message(AdminImportState.waiting_word)
 async def word_wrong_input(message: Message) -> None:
     await message.answer("أرسل ملف جدول Word بصيغة docx.")
-
-
-@router.message(DocxDocumentFilter())
-async def word_receive_document_fallback(
-    message: Message,
-    bot: Bot,
-    db: Database,
-    settings: Settings,
-    state: FSMContext,
-) -> None:
-    """Process a DOCX from a writer even if a stale FSM state blocks the normal route."""
-    await word_receive_document(message, bot, db, settings, state)
