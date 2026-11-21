@@ -3,7 +3,7 @@ from __future__ import annotations
 from datetime import timedelta
 
 from aiogram import Bot, F, Router
-from aiogram.filters import CommandObject, CommandStart
+from aiogram.filters import CommandObject, CommandStart, StateFilter
 from aiogram.fsm.context import FSMContext
 from aiogram.types import CallbackQuery, Message
 
@@ -267,3 +267,12 @@ async def search_result_handler(
         await message.answer(result_text, reply_markup=keyboards.back_user())
     await try_delete(message)
     await state.clear()
+
+@router.message(StateFilter(None))
+async def unknown_message_handler(message: Message) -> None:
+    """Guide otherwise-unhandled private messages without interrupting FSM workflows."""
+    await message.answer(
+        "💊 <b>صيدليات عامودا</b>\n\n"
+        "للاطلاع على الصيدليات والمناوبات في عامودا، اضغط على الأمر:\n\n"
+        "<code>/start</code>"
+    )

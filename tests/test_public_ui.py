@@ -9,9 +9,9 @@ from zoneinfo import ZoneInfo
 from aiogram.enums import ButtonStyle
 from openpyxl import load_workbook
 
-from app import callbacks as cb, texts
+from app import callbacks as cb, keyboards, texts
 from app.middlewares import AntiSpamMiddleware
-from app.public_keyboards import DEVELOPER_URL, user_home, user_results
+from app.public_keyboards import DEVELOPER_URL, user_home, user_preview, user_results
 from app.services.excel import build_missing_pharmacies_template
 
 
@@ -29,6 +29,26 @@ def test_home_button_colors_and_developer_link(monkeypatch) -> None:
     assert buttons["🔄 تحديث الوقت"].style == ButtonStyle.DANGER
     assert buttons["👨‍💻 مطوّر البوت"].style == ButtonStyle.SUCCESS
     assert buttons["👨‍💻 مطوّر البوت"].url == DEVELOPER_URL
+
+
+
+def test_now_button_removed_from_home_and_preview_only() -> None:
+    for markup in (
+        user_home(),
+        user_home(is_admin=True),
+        user_preview(),
+        keyboards.user_home(),
+        keyboards.user_home(is_admin=True),
+    ):
+        callbacks = [button.callback_data for button in _all_buttons(markup)]
+        assert cb.USER_NOW not in callbacks
+        assert cb.USER_TODAY in callbacks
+        assert cb.USER_TOMORROW in callbacks
+        assert cb.USER_SEARCH in callbacks
+        assert cb.USER_REFRESH in callbacks
+
+    admin_actions = [button.callback_data for button in _all_buttons(user_home(is_admin=True))]
+    assert cb.ADMIN_HOME in admin_actions
 
 
 def test_home_supports_premium_custom_emoji(monkeypatch) -> None:

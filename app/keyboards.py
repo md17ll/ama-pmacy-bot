@@ -23,7 +23,6 @@ def keyboard(rows: Iterable[Iterable[InlineKeyboardButton]]) -> InlineKeyboardMa
 
 def user_home(is_admin: bool = False) -> InlineKeyboardMarkup:
     rows = [
-        [button("🌙 الصيدليات المناوبة الآن", cb.USER_NOW, ButtonStyle.PRIMARY)],
         [
             button("📅 صيدليات اليوم", cb.USER_TODAY),
             button("⏭ صيدليات غداً", cb.USER_TOMORROW),

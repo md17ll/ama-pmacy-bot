@@ -43,6 +43,8 @@ def test_home_handles_no_current_pharmacy() -> None:
     text = texts.user_home_text(now, ZoneInfo("Asia/Damascus"), [])
 
     assert "لا توجد صيدلية مناوبة الآن" in text
+    assert "اضغط زر صيدليات اليوم أو البحث عن صيدلية" in text
+    assert "اضغط زر التحديث لاحقاً" not in text
     assert "آخر تحديث" not in text
 
 

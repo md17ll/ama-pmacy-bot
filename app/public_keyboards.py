@@ -33,7 +33,6 @@ def user_home(
 ) -> InlineKeyboardMarkup:
     """Public home keyboard with the requested button colors."""
     rows = [
-        [button("🌙 الصيدليات المناوبة الآن", cb.USER_NOW, ButtonStyle.PRIMARY)],
         [
             button("📅 صيدليات اليوم", cb.USER_TODAY, ButtonStyle.SUCCESS),
             button("⏭ صيدليات غداً", cb.USER_TOMORROW, ButtonStyle.SUCCESS),
