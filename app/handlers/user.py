@@ -5,7 +5,7 @@ from datetime import timedelta
 from aiogram import Bot, F, Router
 from aiogram.filters import CommandObject, CommandStart, StateFilter
 from aiogram.fsm.context import FSMContext
-from aiogram.types import CallbackQuery, Message
+from aiogram.types import CallbackQuery, Message, MessageEntity
 
 from app import callbacks as cb, keyboards, public_keyboards, repositories, texts
 from app.config import Settings
@@ -270,9 +270,22 @@ async def search_result_handler(
 
 @router.message(StateFilter(None))
 async def unknown_message_handler(message: Message) -> None:
-    """Guide otherwise-unhandled private messages without interrupting FSM workflows."""
-    await message.answer(
-        "💊 <b>صيدليات عامودا</b>\n\n"
+    """Guide otherwise-unhandled messages; make /start a clickable Telegram command."""
+    header = "💊 صيدليات عامودا"
+    prefix = (
+        f"{header}\n\n"
         "للاطلاع على الصيدليات والمناوبات في عامودا، اضغط على الأمر:\n\n"
-        "<code>/start</code>"
+    )
+    # Bot API entity offsets count UTF-16 code units, not Python characters.
+    # An explicit bot_command is blue and tappable, unlike <code>/start</code>.
+    utf16_length = lambda value: len(value.encode("utf-16-le")) // 2
+    await message.answer(
+        prefix + "/start",
+        parse_mode=None,
+        entities=[
+            MessageEntity(type="bold", offset=0, length=utf16_length(header)),
+            MessageEntity(
+                type="bot_command", offset=utf16_length(prefix), length=6
+            ),
+        ],
     )

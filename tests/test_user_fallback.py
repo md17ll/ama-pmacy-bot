@@ -17,8 +17,16 @@ def test_unhandled_messages_receive_start_guidance() -> None:
         await user.unknown_message_handler(message)
         message.answer.assert_awaited_once()
         response = message.answer.await_args.args[0]
+        kwargs = message.answer.await_args.kwargs
         assert "صيدليات عامودا" in response
-        assert "<code>/start</code>" in response
+        assert response.endswith("/start")
+        assert kwargs["parse_mode"] is None
+        bold, command = kwargs["entities"]
+        assert bold.type == "bold"
+        assert bold.offset == 0
+        assert command.type == "bot_command"
+        assert command.length == 6
+        assert command.offset == len(response.split("/start")[0].encode("utf-16-le")) // 2
 
     asyncio.run(scenario())
 
